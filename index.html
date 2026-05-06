@@ -3,7 +3,141 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>itsnick</title>
+    <title>Nick Harris</title>
+    <meta name="description" content="Nick Harris - founder of Skylight Studio, builder of Setlist.ID, and one half of BlondeBrunette. Based in Barcelona." />
+    <link rel="canonical" href="https://itsnick.app/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://itsnick.app/" />
+    <meta property="og:title" content="Nick Harris" />
+    <meta property="og:description" content="Founder of Skylight Studio. Builder of Setlist.ID. One half of BlondeBrunette. Based in Barcelona." />
+    <meta property="og:image" content="https://itsnick.app/nick.jpg" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <style>
+      :root {
+        --bg: #fafafa;
+        --fg: #111;
+        --muted: #555;
+        --border: #e5e5e5;
+        --accent: #111;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        line-height: 1.55;
+      }
+      main {
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 64px 24px 96px;
+      }
+      .photo {
+        width: 160px;
+        height: 160px;
+        border-radius: 50%;
+        object-fit: cover;
+        display: block;
+        margin: 0 auto 28px;
+      }
+      h1 {
+        font-size: 28px;
+        font-weight: 600;
+        margin: 0 0 20px;
+        text-align: center;
+        letter-spacing: -0.01em;
+      }
+      .bio {
+        color: var(--muted);
+        font-size: 16px;
+        margin: 0 0 36px;
+      }
+      .bio p { margin: 0 0 14px; }
+      .bio p:last-child { margin-bottom: 0; }
+      ul.links {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      ul.links li {
+        border-top: 1px solid var(--border);
+      }
+      ul.links li:last-child {
+        border-bottom: 1px solid var(--border);
+      }
+      ul.links a {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 16px 4px;
+        color: var(--fg);
+        text-decoration: none;
+        font-size: 16px;
+      }
+      ul.links a:hover { color: #000; background: #f0f0f0; }
+      ul.links .label { font-weight: 500; }
+      ul.links .arrow { color: var(--muted); font-size: 14px; }
+      footer {
+        margin-top: 48px;
+        text-align: center;
+        font-size: 13px;
+        color: var(--muted);
+      }
+    </style>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Person",
+      "name": "Nick Harris",
+      "alternateName": "Nicholas Harris",
+      "url": "https://itsnick.app",
+      "image": "https://itsnick.app/nick.jpg",
+      "jobTitle": "Founder, Skylight Studio",
+      "worksFor": {
+        "@type": "Organization",
+        "name": "Skylight Studio",
+        "url": "https://skylightstudio.co"
+      },
+      "address": {
+        "@type": "PostalAddress",
+        "addressLocality": "Barcelona",
+        "addressCountry": "ES"
+      },
+      "sameAs": [
+        "https://skylightstudio.co",
+        "https://setlist.id",
+        "https://blondebrunette.music",
+        "https://www.linkedin.com/in/nicholasmharris/",
+        "https://instagram.com/africanick",
+        "https://github.com/itsnicknick"
+      ]
+    }
+    </script>
   </head>
-  <body></body>
+  <body>
+    <main>
+      <img class="photo" src="/nick.jpg" alt="Nick Harris" />
+      <h1>Nick Harris</h1>
+      <div class="bio">
+        <p>Hi, I'm Nick. Born in South Africa, raised in California, now based in Barcelona.</p>
+        <p>I founded <a href="https://skylightstudio.co">Skylight Studio</a> to bring enterprise-grade AI to every business, after a decade building analytics practices for NASCAR, DoorDash, National Grid, and Tufts Health Plan.</p>
+        <p>I also build <a href="https://setlist.id">Setlist.ID</a>, a tool for identifying tracklists in DJ mixes, and make music as one half of <a href="https://blondebrunette.music">BlondeBrunette</a>.</p>
+      </div>
+
+      <ul class="links">
+        <li><a href="https://skylightstudio.co" rel="me"><span class="label">Skylight Studio</span><span class="arrow">skylightstudio.co</span></a></li>
+        <li><a href="https://setlist.id" rel="me"><span class="label">Setlist.ID</span><span class="arrow">setlist.id</span></a></li>
+        <li><a href="https://blondebrunette.music" rel="me"><span class="label">BlondeBrunette</span><span class="arrow">blondebrunette.music</span></a></li>
+        <li><a href="https://www.linkedin.com/in/nicholasmharris/" rel="me"><span class="label">LinkedIn</span><span class="arrow">@nicholasmharris</span></a></li>
+        <li><a href="https://instagram.com/africanick" rel="me"><span class="label">Instagram</span><span class="arrow">@africanick</span></a></li>
+        <li><a href="https://github.com/itsnicknick" rel="me"><span class="label">GitHub</span><span class="arrow">@itsnicknick</span></a></li>
+      </ul>
+    </main>
+  </body>
 </html>
