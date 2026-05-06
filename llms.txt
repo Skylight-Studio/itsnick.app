@@ -1,0 +1,18 @@
+# Nick Harris
+
+> Personal site of Nick Harris: founder of Skylight Studio, builder of Setlist.ID, one half of BlondeBrunette. Based in Barcelona.
+
+Nick Harris is an entrepreneur and analytics leader based in Barcelona, Spain. Born in South Africa, raised in Florida. Founder of Skylight Studio, an enterprise AI consultancy. After a decade building analytics practices for clients including NASCAR, DoorDash, National Grid, and Tufts Health Plan, he started Skylight Studio to bring enterprise-grade AI to every business. He also makes music as one half of BlondeBrunette and builds Setlist.ID, a tool for identifying tracklists in DJ mixes. Founder and board member of ReMade BCN, a community-run makerspace in Barcelona focused on open tools, learning, and collaboration.
+
+## Projects
+
+- [Skylight Studio](https://skylightstudio.co): Enterprise AI consultancy founded by Nick Harris. Brings enterprise-grade AI to businesses of every size.
+- [Setlist.ID](https://setlist.id): Tool for identifying tracklists in DJ mixes.
+- [BlondeBrunette](https://blondebrunette.music): Music duo. Nick is one half.
+- [ReMade BCN](https://www.made-bcn.org/): Community-run makerspace in Barcelona. Nick is a founder and board member.
+
+## Profiles
+
+- [LinkedIn](https://www.linkedin.com/in/nicholasmharris/)
+- [GitHub](https://github.com/itsnicknick)
+- [Instagram](https://instagram.com/africanick)
