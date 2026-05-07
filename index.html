@@ -142,7 +142,13 @@
       }
       .socials svg { width: 20px; height: 20px; }
       @media (max-width: 480px) {
+        main { padding: 32px 20px 0; }
+        .photo { width: 112px; height: 112px; margin-bottom: 20px; }
+        h1 { font-size: 24px; margin-bottom: 16px; }
+        .bio { font-size: 15px; margin-bottom: 24px; }
         .tiles { grid-template-columns: 1fr; }
+        .tile { padding: 20px; min-height: 0; gap: 16px; }
+        .tile-logo { width: 56px; height: 56px; }
       }
       footer {
         margin-top: 48px;
@@ -164,7 +170,7 @@
       "url": "https://itsnick.app/",
       "image": "https://itsnick.app/nick.webp",
       "jobTitle": "Founder, Skylight Studio",
-      "email": "mailto:hello@itsnick.app",
+      "email": "hello@itsnick.app",
       "description": "Founder of Skylight Studio, an enterprise AI consultancy. One half of BlondeBrunette. Builder of Setlist.ID. Founder and board member of ReMade BCN. Based in Barcelona.",
       "worksFor": {
         "@type": "Organization",
@@ -176,7 +182,15 @@
         "addressLocality": "Barcelona",
         "addressCountry": "ES"
       },
-      "knowsAbout": ["Enterprise AI", "Data Analytics", "Business Intelligence", "AI Consulting", "Music Production", "DJ Tracklist Identification", "Community Makerspaces"],
+      "birthPlace": {
+        "@type": "Place",
+        "name": "South Africa"
+      },
+      "homeLocation": {
+        "@type": "Place",
+        "name": "Barcelona, Spain"
+      },
+      "knowsAbout": ["Enterprise AI", "Data Analytics", "Business Intelligence", "AI Consulting", "Machine Learning", "Music Production", "DJ Tracklist Identification", "Community Makerspaces"],
       "sameAs": [
         "https://skylightstudio.co",
         "https://blondebrunette.music",
@@ -211,8 +225,26 @@
       "mainEntity": {
         "@type": "Person",
         "name": "Nick Harris",
-        "url": "https://itsnick.app/"
+        "alternateName": "Nicholas Harris",
+        "url": "https://itsnick.app/",
+        "image": "https://itsnick.app/nick.webp",
+        "jobTitle": "Founder, Skylight Studio",
+        "description": "Founder of Skylight Studio, an enterprise AI consultancy. One half of BlondeBrunette. Builder of Setlist.ID. Founder and board member of ReMade BCN. Based in Barcelona."
       }
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://itsnick.app/"
+        }
+      ]
     }
     </script>
   </head>
@@ -229,28 +261,28 @@
 
       <div class="tiles">
         <a class="tile" href="https://skylightstudio.co" rel="me">
-          <img class="tile-logo" src="/skylight-mark.png" alt="" />
+          <img class="tile-logo" src="/skylight-mark.png" alt="" width="72" height="72" loading="lazy" decoding="async" />
           <div class="tile-text">
             <div class="tile-name">Skylight Studio</div>
             <div class="tile-desc">Enterprise AI, built to ship</div>
           </div>
         </a>
         <a class="tile" href="https://blondebrunette.music" rel="me">
-          <img class="tile-logo" src="https://www.google.com/s2/favicons?domain=blondebrunette.music&sz=128" alt="" />
+          <img class="tile-logo" src="/blondebrunette-logo.png" alt="" width="72" height="72" loading="lazy" decoding="async" />
           <div class="tile-text">
             <div class="tile-name">BlondeBrunette</div>
             <div class="tile-desc">Electronic music duo</div>
           </div>
         </a>
         <a class="tile" href="https://setlist.id" rel="me">
-          <img class="tile-logo" src="https://www.google.com/s2/favicons?domain=setlist.id&sz=128" alt="" />
+          <img class="tile-logo" src="/setlistid-logo.png" alt="" width="72" height="72" loading="lazy" decoding="async" />
           <div class="tile-text">
             <div class="tile-name">Setlist.ID</div>
             <div class="tile-desc">Shazam for DJ mixes</div>
           </div>
         </a>
         <a class="tile" href="https://www.made-bcn.org/" rel="me">
-          <img class="tile-logo" src="https://www.google.com/s2/favicons?domain=made-bcn.org&sz=128" alt="" />
+          <img class="tile-logo" src="/made-bcn-logo.png" alt="" width="72" height="72" loading="lazy" decoding="async" />
           <div class="tile-text">
             <div class="tile-name">ReMade BCN</div>
             <div class="tile-desc">Open makerspace in Barcelona</div>

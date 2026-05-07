@@ -20,3 +20,4 @@ User-agent: Applebot-Extended
 Allow: /
 
 Sitemap: https://itsnick.app/sitemap.xml
+Llms-txt: https://itsnick.app/llms.txt

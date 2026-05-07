@@ -1,0 +1,23 @@
+name: Submit to IndexNow
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'sitemap.xml'
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping IndexNow
+        run: |
+          curl -sS -X POST "https://api.indexnow.org/IndexNow" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d '{
+              "host": "itsnick.app",
+              "key": "86714d0204146046e1a7143aa380792a",
+              "keyLocation": "https://itsnick.app/86714d0204146046e1a7143aa380792a.txt",
+              "urlList": ["https://itsnick.app/"]
+            }'
