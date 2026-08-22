@@ -36,6 +36,19 @@ are not applied by a plain static server; use `vercel dev` to exercise those.
 vercel --prod --scope skylight-studio
 ```
 
+If a push to `main` does not produce a deployment, check that the Git
+connection is still live before debugging anything else:
+
+```
+vercel project inspect itsnick.app --scope skylight-studio
+```
+
+This repository was transferred between GitHub owners, which silently
+invalidated Vercel's stored Git credential: the project still reported the
+correct repository and production branch, but no push produced a deployment
+for roughly three months. `vercel git disconnect` followed by
+`vercel git connect` issues a fresh credential and restores it.
+
 ## Editing notes
 
 - **Structured data** lives in a single `@graph` with three nodes (`Person`,
