@@ -6,6 +6,7 @@ on:
     paths:
       - 'index.html'
       - 'sitemap.xml'
+      - 'og-image.png'
 
 jobs:
   submit:

@@ -19,9 +19,15 @@
       ]
     },
     {
-      "source": "/(skylight-mark|blondebrunette-logo|setlistid-logo|made-bcn-logo)\\.png",
+      "source": "/(skylight-mark|skylight-mark-light|blondebrunette-logo|setlistid-logo|made-bcn-logo)\\.png",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    },
+    {
+      "source": "/og-image.png",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=604800" }
       ]
     },
     {

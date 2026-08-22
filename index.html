@@ -13,7 +13,8 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
-    <meta name="theme-color" content="#fafafa" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fafafa" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f0f0f" />
 
     <link rel="preload" as="image" href="/nick.webp" fetchpriority="high" />
 
@@ -21,8 +22,16 @@
     <meta property="og:url" content="https://itsnick.app/" />
     <meta property="og:title" content="Nick Harris | Founder, Skylight Studio" />
     <meta property="og:description" content="Founder of Skylight Studio. One half of BlondeBrunette. Builder of Setlist.ID. Co-founder of ReMade BCN. Based in Barcelona." />
-    <meta property="og:image" content="https://itsnick.app/nick.webp" />
+    <meta property="og:site_name" content="Nick Harris" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:image" content="https://itsnick.app/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Nick Harris, founder of Skylight Studio, Barcelona" />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://itsnick.app/og-image.png" />
+    <meta name="twitter:image:alt" content="Nick Harris, founder of Skylight Studio, Barcelona" />
 
     <style>
       :root {
@@ -30,7 +39,20 @@
         --fg: #111;
         --muted: #555;
         --border: #e5e5e5;
-        --accent: #111;
+        --card: #fff;
+        --hover: #111;
+        --rule: #bbb;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f0f0f;
+          --fg: #f2f2f2;
+          --muted: #a1a1a1;
+          --border: #2a2a2a;
+          --card: #171717;
+          --hover: #f2f2f2;
+          --rule: #666;
+        }
       }
       * { box-sizing: border-box; }
       html, body {
@@ -70,6 +92,20 @@
       }
       .bio p { margin: 0 0 14px; }
       .bio p:last-child { margin-bottom: 0; }
+      .bio a {
+        color: var(--fg);
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-decoration-color: var(--rule);
+        text-underline-offset: 2px;
+        transition: text-decoration-color 0.15s;
+      }
+      .bio a:hover { text-decoration-color: var(--fg); }
+      a:focus-visible {
+        outline: 2px solid var(--fg);
+        outline-offset: 3px;
+        border-radius: 4px;
+      }
       .tiles {
         display: grid;
         grid-template-columns: repeat(2, 1fr);
@@ -84,14 +120,18 @@
         min-height: 140px;
         border: 1px solid var(--border);
         border-radius: 16px;
-        background: #fff;
+        background: var(--card);
         color: var(--fg);
         text-decoration: none;
         transition: border-color 0.15s, transform 0.15s;
       }
       .tile:hover {
-        border-color: #111;
+        border-color: var(--hover);
         transform: translateY(-1px);
+      }
+      .tile picture {
+        display: flex;
+        flex-shrink: 0;
       }
       .tile-logo {
         width: 72px;
@@ -132,12 +172,12 @@
         height: 44px;
         border: 1px solid var(--border);
         border-radius: 50%;
-        background: #fff;
+        background: var(--card);
         color: var(--fg);
         transition: border-color 0.15s, transform 0.15s;
       }
       .socials a:hover {
-        border-color: #111;
+        border-color: var(--hover);
         transform: translateY(-1px);
       }
       .socials svg { width: 20px; height: 20px; }
@@ -164,85 +204,64 @@
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
-      "@type": "Person",
-      "name": "Nick Harris",
-      "alternateName": "Nicholas Harris",
-      "url": "https://itsnick.app/",
-      "image": "https://itsnick.app/nick.webp",
-      "jobTitle": "Founder, Skylight Studio",
-      "email": "hello@itsnick.app",
-      "description": "Founder of Skylight Studio, an enterprise AI consultancy. One half of BlondeBrunette. Builder of Setlist.ID. Founder and board member of ReMade BCN. Based in Barcelona.",
-      "worksFor": {
-        "@type": "Organization",
-        "name": "Skylight Studio",
-        "url": "https://skylightstudio.co"
-      },
-      "address": {
-        "@type": "PostalAddress",
-        "addressLocality": "Barcelona",
-        "addressCountry": "ES"
-      },
-      "birthPlace": {
-        "@type": "Place",
-        "name": "South Africa"
-      },
-      "homeLocation": {
-        "@type": "Place",
-        "name": "Barcelona, Spain"
-      },
-      "knowsAbout": ["Enterprise AI", "Data Analytics", "Business Intelligence", "AI Consulting", "Machine Learning", "Music Production", "DJ Tracklist Identification", "Community Makerspaces"],
-      "sameAs": [
-        "https://skylightstudio.co",
-        "https://blondebrunette.music",
-        "https://setlist.id",
-        "https://www.made-bcn.org/",
-        "https://www.linkedin.com/in/nicholasmharris/",
-        "https://instagram.com/africanick",
-        "https://github.com/itsnicknick"
-      ]
-    }
-    </script>
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "WebSite",
-      "name": "Nick Harris",
-      "url": "https://itsnick.app/",
-      "description": "Personal site of Nick Harris, founder of Skylight Studio, one half of BlondeBrunette, and builder of Setlist.ID.",
-      "author": {
-        "@type": "Person",
-        "name": "Nick Harris",
-        "url": "https://itsnick.app/"
-      }
-    }
-    </script>
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "ProfilePage",
-      "url": "https://itsnick.app/",
-      "name": "Nick Harris",
-      "mainEntity": {
-        "@type": "Person",
-        "name": "Nick Harris",
-        "alternateName": "Nicholas Harris",
-        "url": "https://itsnick.app/",
-        "image": "https://itsnick.app/nick.webp",
-        "jobTitle": "Founder, Skylight Studio",
-        "description": "Founder of Skylight Studio, an enterprise AI consultancy. One half of BlondeBrunette. Builder of Setlist.ID. Founder and board member of ReMade BCN. Based in Barcelona."
-      }
-    }
-    </script>
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "BreadcrumbList",
-      "itemListElement": [
+      "@graph": [
         {
-          "@type": "ListItem",
-          "position": 1,
-          "name": "Home",
-          "item": "https://itsnick.app/"
+          "@type": "Person",
+          "@id": "https://itsnick.app/#nick",
+          "name": "Nick Harris",
+          "alternateName": "Nicholas Harris",
+          "url": "https://itsnick.app/",
+          "mainEntityOfPage": { "@id": "https://itsnick.app/#page" },
+          "image": {
+            "@type": "ImageObject",
+            "url": "https://itsnick.app/nick.webp",
+            "width": 320,
+            "height": 320
+          },
+          "jobTitle": "Founder, Skylight Studio",
+          "email": "hello@itsnick.app",
+          "description": "Founder of Skylight Studio, an enterprise AI consultancy. One half of BlondeBrunette. Builder of Setlist.ID. Founder and board member of ReMade BCN. Based in Barcelona.",
+          "worksFor": {
+            "@type": "Organization",
+            "name": "Skylight Studio",
+            "url": "https://skylightstudio.co"
+          },
+          "address": {
+            "@type": "PostalAddress",
+            "addressLocality": "Barcelona",
+            "addressCountry": "ES"
+          },
+          "birthPlace": { "@type": "Place", "name": "South Africa" },
+          "homeLocation": { "@type": "Place", "name": "Barcelona, Spain" },
+          "knowsAbout": ["Enterprise AI", "Data Analytics", "Business Intelligence", "AI Consulting", "Machine Learning", "Music Production", "DJ Tracklist Identification", "Community Makerspaces"],
+          "sameAs": [
+            "https://skylightstudio.co",
+            "https://blondebrunette.music",
+            "https://setlist.id",
+            "https://www.made-bcn.org/",
+            "https://www.linkedin.com/in/nicholasmharris/",
+            "https://instagram.com/africanick",
+            "https://github.com/itsnicknick"
+          ]
+        },
+        {
+          "@type": "WebSite",
+          "@id": "https://itsnick.app/#website",
+          "url": "https://itsnick.app/",
+          "name": "Nick Harris",
+          "description": "Personal site of Nick Harris, founder of Skylight Studio, one half of BlondeBrunette, and builder of Setlist.ID.",
+          "inLanguage": "en",
+          "publisher": { "@id": "https://itsnick.app/#nick" }
+        },
+        {
+          "@type": "ProfilePage",
+          "@id": "https://itsnick.app/#page",
+          "url": "https://itsnick.app/",
+          "name": "Nick Harris",
+          "isPartOf": { "@id": "https://itsnick.app/#website" },
+          "about": { "@id": "https://itsnick.app/#nick" },
+          "mainEntity": { "@id": "https://itsnick.app/#nick" },
+          "primaryImageOfPage": { "@id": "https://itsnick.app/#nick" }
         }
       ]
     }
@@ -261,7 +280,10 @@
 
       <div class="tiles">
         <a class="tile" href="https://skylightstudio.co" rel="me">
-          <img class="tile-logo" src="/skylight-mark.png" alt="" width="72" height="72" loading="lazy" decoding="async" />
+          <picture>
+            <source srcset="/skylight-mark-light.png" media="(prefers-color-scheme: dark)" />
+            <img class="tile-logo" src="/skylight-mark.png" alt="" width="72" height="72" loading="lazy" decoding="async" />
+          </picture>
           <div class="tile-text">
             <div class="tile-name">Skylight Studio</div>
             <div class="tile-desc">Enterprise AI, built to ship</div>
@@ -308,7 +330,7 @@
       </ul>
 
       <footer>
-        <a href="https://github.com/itsnicknick/itsnick.app" rel="me">View source</a> · <a href="mailto:hello@itsnick.app">hello@itsnick.app</a>
+        <a href="https://github.com/Skylight-Studio/itsnick.app" rel="me">View source</a> · <a href="mailto:hello@itsnick.app">hello@itsnick.app</a>
       </footer>
     </main>
   </body>
