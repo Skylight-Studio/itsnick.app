@@ -43,11 +43,20 @@ connection is still live before debugging anything else:
 vercel project inspect itsnick.app --scope skylight-studio
 ```
 
-This repository was transferred between GitHub owners, which silently
-invalidated Vercel's stored Git credential: the project still reported the
-correct repository and production branch, but no push produced a deployment
-for roughly three months. `vercel git disconnect` followed by
-`vercel git connect` issues a fresh credential and restores it.
+Two things silently break this link, and both leave the project *looking*
+correctly connected:
+
+- **Transferring the repository between GitHub owners** invalidates the stored
+  Git credential. The project keeps reporting the right repository and branch,
+  but no push deploys. This went unnoticed here for roughly three months.
+- **Deleting and recreating the repository** changes its GitHub `id`, while
+  Vercel keeps caching the old one. `vercel git connect` reports "already
+  connected" and changes nothing.
+
+In both cases the fix is `vercel git disconnect` followed by
+`vercel git connect`. Afterwards, confirm Vercel's `repoId` matches
+`gh api repos/Skylight-Studio/itsnick.app -q .id`, then push and confirm a
+deployment with `source: git` actually appears.
 
 ## Editing notes
 
