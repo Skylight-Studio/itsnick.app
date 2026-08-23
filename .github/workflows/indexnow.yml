@@ -10,7 +10,14 @@ on:
 
 jobs:
   submit:
-    runs-on: ubuntu-latest
+    # Self-hosted: eight runners on the HTPC, all labelled `htpc`. The
+    # Skylight-Studio org is on the GitHub free plan -- 2,000 GitHub-hosted
+    # Actions minutes a month across 14 private repos -- and exhausting that
+    # quota blocks hosted runners org-wide, presenting as a 2-3 second red
+    # build with no log rather than an honest billing error. Self-hosted
+    # minutes are unmetered. This job only needs curl, which the runner image
+    # ships.
+    runs-on: [self-hosted, htpc]
     steps:
       - name: Ping IndexNow
         run: |
