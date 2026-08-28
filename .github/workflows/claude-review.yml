@@ -1,0 +1,411 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
+
+jobs:
+  # Automatic review: runs on open and on every subsequent push to the branch.
+  review:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      !endsWith(github.event.pull_request.user.login, '[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A rapid series of pushes only reviews the final state, instead of once
+    # per push.
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+      actions: read
+    steps:
+      # The PR can merge or close while this run sits in the queue (one
+      # runner, one job at a time). PR 293 got a full review posted onto an
+      # already-merged PR this way. Check the LIVE state, not the payload's.
+      - name: Check the PR is still open
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          state=$(gh pr view ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} --json state -q .state)
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "PR state: $state"
+
+      - uses: actions/checkout@v6
+        if: steps.gate.outputs.state == 'OPEN'
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        if: steps.gate.outputs.state == 'OPEN'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are reviewing a pull request.
+
+            REPO:       ${{ github.repository }}
+            PR NUMBER:  ${{ github.event.pull_request.number }}
+            EVENT:      ${{ github.event.action }}
+            BASE SHA:   ${{ github.event.pull_request.base.sha }}
+            HEAD SHA:   ${{ github.event.pull_request.head.sha }}
+            BEFORE SHA: ${{ github.event.before }}
+
+            The PR branch is already checked out with full history.
+
+            FIRST, before reviewing anything, read what has already been said
+            on this PR, so you do not repeat it:
+              gh pr view ${{ github.event.pull_request.number }} --json comments,reviews
+              gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments
+
+            Decide your scope from whether you have ACTUALLY reviewed this PR
+            before, judged by the comments you just read, NOT from the event
+            name. An earlier run can fail or never happen, so "synchronize"
+            does not prove a review exists.
+
+              - If you find NO prior review of your own on this PR, review the
+                WHOLE pull request:
+                  git diff ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}
+                Earlier commits have never been looked at. Reviewing only the
+                latest push here would silently skip them.
+
+              - If you DO find a prior review of your own, concentrate on what
+                changed since it:
+                  git diff ${{ github.event.before }}..${{ github.event.pull_request.head.sha }}
+                Do NOT repeat a finding you already posted; a duplicate is
+                worse than silence. If a previous finding now looks fixed, note
+                it in one line in the summary rather than raising it again. If
+                nothing new is worth flagging, post a one-line summary saying
+                so and stop.
+
+            If git shows any changed file as binary, do NOT accept a benign
+            explanation for it and do not skim past it. Re-diff it with
+            `git diff --text`, and establish exactly why git classifies it
+            as binary: for a source file that usually means a stray control
+            byte, for example a NUL typed into a string literal. A text file
+            that git treats as binary is itself a reportable defect, because
+            it hides the file from diff and blame for everyone after you.
+
+            The diff being consistent with itself is not enough. Use Grep and
+            Read to check the change's assumptions against the rest of the
+            codebase before accepting them:
+              - A route or link target: does it exist, and can every user
+                who will see the link actually open it (authorisation)?
+              - A count or "N more" shown to users: is the underlying query
+                capped or paginated, making the number wrong past the cap?
+              - A key, sentinel or constant this diff defines: is it already
+                defined elsewhere, or duplicated where it should be imported?
+              - A condition on one property standing in for another (for
+                example "has a header" standing in for "has a destination"):
+                enumerate the real cases in the codebase and check each one,
+                not just the cases the author had in mind.
+            Most real defects in a PR are visible only from outside its diff.
+
+            Review the changes for, in priority order:
+              1. Correctness bugs: logic errors, off-by-one, inverted
+                 conditionals, unhandled null/None, race conditions, error
+                 handling that swallows failures
+              2. Security: injection, committed secrets, missing authorisation
+                 checks, user input reaching a shell or a query
+              3. Data loss: destructive operations without a guard, migrations
+                 that are not backward compatible
+              4. Performance problems that would actually bite: N+1 queries,
+                 unbounded loops over network calls
+
+            Follow any CLAUDE.md in the repository.
+
+            Do NOT report:
+              - Formatting, naming, or style preferences
+              - Missing tests, unless the change is genuinely high risk
+              - Anything the repository's own CI already checks
+              - Speculative issues you cannot point at a specific line for
+
+            Verify before you post. If you assert a behaviour, cite the file
+            and line that demonstrates it; do not infer it from a function
+            name. A false positive costs the author more than a missed nit.
+
+            How to post:
+              - Post the whole round as ONE review submission: the summary as
+                the review body, every line-anchored finding as an inline
+                comment in the SAME call. This gives the PR timeline a single
+                entry instead of one per comment. Heredocs, pipes and stdin
+                are blocked here, so FIRST use the Write tool to put the JSON
+                payload at /tmp/review-payload.json (never inside the repo
+                checkout):
+
+                  {
+                    "event": "COMMENT",
+                    "body": "2 issues, 1 minor. <short overall summary>",
+                    "comments": [
+                      {"path": "app/example.py", "line": 42, "side": "RIGHT",
+                       "body": "<the finding>"}
+                    ]
+                  }
+
+                then submit it (REPO and PR NUMBER are given above):
+
+                  gh api repos/<REPO>/pulls/<PR NUMBER>/reviews --input /tmp/review-payload.json
+
+              - "event" is always COMMENT, never APPROVE or REQUEST_CHANGES.
+              - Open the body with a tally, for example "2 issues, 1 minor".
+                If you found nothing, the body is "No issues found" and
+                "comments" is an empty array (still one review, so the PR
+                shows it was looked at).
+              - Every inline comment must anchor to a line that appears in
+                THIS PR's diff, on side RIGHT (add "start_line" for a range).
+                A finding with no such line to point at goes in the review
+                body instead, cited as path:line.
+              - If the POST returns 422, the error names the comment it
+                rejected: fix that anchor, or move that finding into the
+                body, then retry. One bad anchor otherwise loses the whole
+                batch.
+              - At most 10 inline comments. If you found more, include the 10
+                most serious and give the remaining count in the body.
+              - Post findings only through this one review call. Do not post
+                separate per-finding reviews, do not post an extra summary
+                comment, and do not write the review out as a chat message.
+          # Opus at high effort, always: PR 293 showed Sonnet single-pass
+          # missing 10 verified defects. Fall back to Sonnet rather than
+          # failing the run if Opus is unavailable. 40 turns was not enough
+          # for a PR whose main file needed --text re-diffing; 80 gives the
+          # cross-codebase checks room.
+          claude_args: |
+            --model opus
+            --effort high
+            --fallback-model sonnet
+            --max-turns 80
+            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Glob,Grep,Read,Write(//tmp/**),Write(/tmp/**)"
+
+  # On-demand review: "@claude review" on an existing PR.
+  #
+  # GitHub decides which workflows a pull_request event runs from the BASE side,
+  # but it only re-decides when the branch is pushed to. A PR opened before this
+  # file reached its base branch therefore never picks the review job up, and
+  # reopening it does not help: the merge ref is recomputed, the workflow set is
+  # not. This job is the lever for those PRs, and for re-running a review by
+  # hand. It reuses the review prompt rather than the interactive assistant,
+  # which is built for answering and editing, not reviewing.
+  review_on_demand:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, '@claude review') &&
+      !endsWith(github.event.comment.user.login, '[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Deliberately NOT the same group as the automatic review job: sharing
+    # it meant an "@claude review" comment cancelled an in-flight automatic
+    # review (seen on PR 293, 4 seconds in). The runner serialises them
+    # anyway, and the gate below skips this job when the automatic review
+    # already covers the PR's current head commit.
+    concurrency:
+      group: claude-review-ondemand-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+      actions: read
+    steps:
+      - name: Check the PR is still open and not already covered
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          state=$(gh pr view ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} --json state -q .state)
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "PR state: $state"
+
+          # Skip when the AUTOMATIC review job is already queued, running, or
+          # finished successfully for the PR's current head commit: a push and
+          # an "@claude review" comment seconds apart otherwise produce two
+          # full reviews of the same commit (seen on es-internal PR 299).
+          # Failed and cancelled runs do not count, so this job still serves
+          # as the retry path, and PRs from before the workflow existed have
+          # no pull_request runs at all and proceed as before.
+          head_sha=$(gh pr view ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} --json headRefOid -q .headRefOid)
+          covered=$(gh api "repos/${{ github.repository }}/actions/workflows/claude-review.yml/runs?event=pull_request&head_sha=$head_sha" \
+            --jq '[.workflow_runs[] | select(.status == "queued" or .status == "in_progress" or (.status == "completed" and .conclusion == "success"))] | length')
+          echo "covered=$covered" >> "$GITHUB_OUTPUT"
+          echo "Automatic review runs covering $head_sha: $covered"
+
+      - uses: actions/checkout@v6
+        if: steps.gate.outputs.state == 'OPEN' && steps.gate.outputs.covered == '0'
+        with:
+          fetch-depth: 0
+
+      # The action checks the PR branch out itself when the comment is on a PR.
+      - uses: anthropics/claude-code-action@v1
+        if: steps.gate.outputs.state == 'OPEN' && steps.gate.outputs.covered == '0'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are reviewing a pull request, asked for by hand.
+
+            REPO:       ${{ github.repository }}
+            PR NUMBER:  ${{ github.event.issue.number }}
+
+            The PR branch is already checked out with full history. There is no
+            pull_request payload on this event, so establish the range yourself:
+
+              gh pr view ${{ github.event.issue.number }} --json baseRefName,headRefName,headRefOid
+
+            then review the whole PR:
+
+              git diff origin/<baseRefName>...HEAD
+
+            FIRST, read what has already been said, so you do not repeat it:
+              gh pr view ${{ github.event.issue.number }} --json comments,reviews
+              gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/comments
+
+            If you find a prior review of your own, do not repeat its findings.
+            Note in one line any that now look fixed, and concentrate on
+            anything it did not cover. If nothing is worth flagging, say so in
+            one line and stop.
+
+            If git shows any changed file as binary, do NOT accept a benign
+            explanation for it and do not skim past it. Re-diff it with
+            `git diff --text`, and establish exactly why git classifies it
+            as binary: for a source file that usually means a stray control
+            byte, for example a NUL typed into a string literal. A text file
+            that git treats as binary is itself a reportable defect, because
+            it hides the file from diff and blame for everyone after you.
+
+            The diff being consistent with itself is not enough. Use Grep and
+            Read to check the change's assumptions against the rest of the
+            codebase before accepting them:
+              - A route or link target: does it exist, and can every user
+                who will see the link actually open it (authorisation)?
+              - A count or "N more" shown to users: is the underlying query
+                capped or paginated, making the number wrong past the cap?
+              - A key, sentinel or constant this diff defines: is it already
+                defined elsewhere, or duplicated where it should be imported?
+              - A condition on one property standing in for another (for
+                example "has a header" standing in for "has a destination"):
+                enumerate the real cases in the codebase and check each one,
+                not just the cases the author had in mind.
+            Most real defects in a PR are visible only from outside its diff.
+
+            Review the changes for, in priority order:
+              1. Correctness bugs: logic errors, off-by-one, inverted
+                 conditionals, unhandled null/None, race conditions, error
+                 handling that swallows failures
+              2. Security: injection, committed secrets, missing authorisation
+                 checks, user input reaching a shell or a query
+              3. Data loss: destructive operations without a guard, migrations
+                 that are not backward compatible
+              4. Performance problems that would actually bite: N+1 queries,
+                 unbounded loops over network calls
+
+            Follow any CLAUDE.md in the repository.
+
+            Do NOT report:
+              - Formatting, naming, or style preferences
+              - Missing tests, unless the change is genuinely high risk
+              - Anything the repository's own CI already checks
+              - Speculative issues you cannot point at a specific line for
+
+            Verify before you post. If you assert a behaviour, cite the file
+            and line that demonstrates it; do not infer it from a function
+            name. A false positive costs the author more than a missed nit.
+
+            How to post:
+              - Post the whole round as ONE review submission: the summary as
+                the review body, every line-anchored finding as an inline
+                comment in the SAME call. This gives the PR timeline a single
+                entry instead of one per comment. Heredocs, pipes and stdin
+                are blocked here, so FIRST use the Write tool to put the JSON
+                payload at /tmp/review-payload.json (never inside the repo
+                checkout):
+
+                  {
+                    "event": "COMMENT",
+                    "body": "2 issues, 1 minor. <short overall summary>",
+                    "comments": [
+                      {"path": "app/example.py", "line": 42, "side": "RIGHT",
+                       "body": "<the finding>"}
+                    ]
+                  }
+
+                then submit it (REPO and PR NUMBER are given above):
+
+                  gh api repos/<REPO>/pulls/<PR NUMBER>/reviews --input /tmp/review-payload.json
+
+              - "event" is always COMMENT, never APPROVE or REQUEST_CHANGES.
+              - Open the body with a tally, for example "2 issues, 1 minor".
+                If you found nothing, the body is "No issues found" and
+                "comments" is an empty array (still one review, so the PR
+                shows it was looked at).
+              - Every inline comment must anchor to a line that appears in
+                THIS PR's diff, on side RIGHT (add "start_line" for a range).
+                A finding with no such line to point at goes in the review
+                body instead, cited as path:line.
+              - If the POST returns 422, the error names the comment it
+                rejected: fix that anchor, or move that finding into the
+                body, then retry. One bad anchor otherwise loses the whole
+                batch.
+              - At most 10 inline comments. If you found more, include the 10
+                most serious and give the remaining count in the body.
+              - Post findings only through this one review call. Do not post
+                separate per-finding reviews, do not post an extra summary
+                comment, and do not write the review out as a chat message.
+          # See the automatic review job for why Opus at high effort and 80
+          # turns. The first on-demand run on PR 293 died at 40 turns
+          # without posting anything.
+          claude_args: |
+            --model opus
+            --effort high
+            --fallback-model sonnet
+            --max-turns 80
+            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Glob,Grep,Read,Write(//tmp/**),Write(/tmp/**)"
+
+  # On-demand: someone writes "@claude ..." in a PR or issue comment. Anything
+  # starting "@claude review" is handled by the job above instead.
+  mention:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      contains(github.event.comment.body, '@claude') &&
+      !contains(github.event.comment.body, '@claude review') &&
+      !endsWith(github.event.comment.user.login, '[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # Deliberately read-only on contents: this job runs on the HTPC, which
+      # also hosts Immich, Nextcloud, Plex and Polymarket. @claude can answer
+      # and review on demand, but cannot push commits.
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # No `prompt` input, so the action runs in interactive mode and answers
+      # whatever was actually written after @claude.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Without an explicit --allowedTools this job inherits the action's
+          # restrictive default set, which has no `git diff`, no `gh` and no
+          # comment tool: it cannot read a diff or answer, so it burns every
+          # turn on permission denials and dies on the turn limit. Same read
+          # tools as the review jobs, plus the comment tools so it can answer
+          # (the review jobs post via the reviews API instead), minus anything
+          # that writes to the repo (see the contents: read note above).
+          claude_args: |
+            --max-turns 40
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Glob,Grep,Read"
