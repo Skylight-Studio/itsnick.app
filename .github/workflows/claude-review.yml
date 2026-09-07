@@ -3,6 +3,12 @@ name: Claude PR Review
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
+  # THIS REPO IS PUBLIC, so anyone with a GitHub account can comment on a PR or
+  # issue here. Both issue_comment jobs below are therefore gated on
+  # author_association: without it, any stranger's "@claude" comment starts a job
+  # that runs in base-repo context with this workflow's secrets and
+  # pull-requests: write, over a branch and a CLAUDE.md they control. The gate is
+  # on who wrote the comment, because the body itself is attacker-chosen text.
   issue_comment:
     types: [created]
 
@@ -197,6 +203,8 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request != null &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+               github.event.comment.author_association) &&
       contains(github.event.comment.body, '@claude review') &&
       !endsWith(github.event.comment.user.login, '[bot]')
     runs-on: ubuntu-latest
@@ -375,6 +383,8 @@ jobs:
   mention:
     if: >-
       github.event_name == 'issue_comment' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+               github.event.comment.author_association) &&
       contains(github.event.comment.body, '@claude') &&
       !contains(github.event.comment.body, '@claude review') &&
       !endsWith(github.event.comment.user.login, '[bot]')
