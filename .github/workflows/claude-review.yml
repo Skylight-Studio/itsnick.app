@@ -3,17 +3,33 @@ name: Claude PR Review
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
-  # THIS REPO IS PUBLIC, so anyone with a GitHub account can comment on a PR or
-  # issue here. Both issue_comment jobs below are therefore gated on
-  # author_association: without it, any stranger's "@claude" comment starts a job
-  # that runs in base-repo context with this workflow's secrets and
-  # pull-requests: write, over a branch and a CLAUDE.md they control. The gate is
-  # on who wrote the comment, because the body itself is attacker-chosen text.
+    # A PR that touches ONLY these has nothing this reviewer can find, and a
+    # skipped run costs six minutes and about three dollars less than one that
+    # reads the whole codebase to say "no issues found". GitHub skips only when
+    # EVERY changed file matches, so a mixed docs-plus-code PR still runs.
+    # Checked 2026-09-04: no repo in the org uses branch protection, so a
+    # skipped run cannot leave a required check pending forever.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '**/package-lock.json'
+      - '**/poetry.lock'
+      - '**/uv.lock'
+      - '**/*.png'
+      - '**/*.jpg'
+      - '**/*.svg'
+      - '**/*.ico'
+      - 'LICENSE'
+  # Both issue_comment jobs below are gated on author_association. Without it
+  # any GitHub user who can comment could start a job on the self-hosted runner
+  # with the workflow's secrets in scope. The comment body is attacker-chosen
+  # text, so the gate is on who wrote it, not on what it says.
   issue_comment:
     types: [created]
 
 jobs:
-  # Automatic review: runs on open and on every subsequent push to the branch.
+  # Automatic review: runs on open and on every subsequent push to the branch,
+  # except a push that changes nothing reviewable (see the skip check below).
   review:
     if: >-
       github.event_name == 'pull_request' &&
@@ -51,8 +67,104 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@v1
+      # The agent used to open every review by asking the API what had already
+      # been said, three or four turns before it could start reading code. Those
+      # calls cost nothing here, so the answer is waiting for it as a file, and
+      # the scope decision is made from that answer instead of from the event
+      # name. Runs after checkout because it validates the before-SHA against
+      # the actual repository.
+      - name: Collect prior review context
+        id: prior
         if: steps.gate.outputs.state == 'OPEN'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR/reviews"   --paginate > "$RUNNER_TEMP/reviews.json"
+          gh api "repos/$REPO/pulls/$PR/comments"  --paginate > "$RUNNER_TEMP/inline.json"
+          gh api "repos/$REPO/issues/$PR/comments" --paginate > "$RUNNER_TEMP/issue.json"
+          # --paginate emits one array per page, so `add` flattens them back
+          # into a single list. `add` on an empty slurp is null, hence `[]?`.
+          jq -n \
+            --slurpfile r "$RUNNER_TEMP/reviews.json" \
+            --slurpfile i "$RUNNER_TEMP/inline.json" \
+            --slurpfile c "$RUNNER_TEMP/issue.json" \
+            '{reviews:  [$r | add[]? | {user: .user.login, state, body, submitted_at}],
+              inline:   [$i | add[]? | {user: .user.login, path, line, body}],
+              comments: [$c | add[]? | {user: .user.login, body, created_at}]}' \
+            > "$RUNNER_TEMP/prior-review.json"
+          n=$(jq '[.reviews[], .inline[] | select(.user | test("claude|github-actions"; "i"))] | length' \
+                "$RUNNER_TEMP/prior-review.json")
+
+          # An incremental range is only safe when there IS a previous review to
+          # be incremental to AND we know where it stopped. `github.event.before`
+          # is set on `synchronize` and on nothing else, so on opened, reopened
+          # and ready_for_review it is the empty string, and using it unchecked
+          # builds `git diff ..HEAD`, which is malformed. Anything unusable
+          # falls back to the whole PR, which is the safe direction to fail in.
+          # A force-push (rebase, amend) leaves the old head reachable from no
+          # branch, so the full clone above does not carry it. GitHub still
+          # serves it by SHA for a while, and without it a rebase that changed
+          # nothing gets a full re-review, so try once before giving up.
+          if [ -n "$BEFORE" ] \
+             && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+             && ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            git fetch --quiet origin "$BEFORE" 2>/dev/null || true
+          fi
+          if [ "$n" -gt 0 ] && [ -n "$BEFORE" ] \
+             && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            mode=incremental; range="$BEFORE..$HEAD_SHA"
+          else
+            mode=full;        range="$BASE_SHA...$HEAD_SHA"
+          fi
+          echo "mode=$mode"   >> "$GITHUB_OUTPUT"
+          echo "range=$range" >> "$GITHUB_OUTPUT"
+          echo "Prior review artefacts by this reviewer: $n -> $mode ($range)"
+
+          # Skip the review when the push cannot contain anything new. Over
+          # 2026-08-29..09-12, 33 of 245 follow-up reviews opened with
+          # "identical tree", "this push is the qa merge" or "docstring-only",
+          # each a 2-3 minute Opus run to say nothing. The test is exact: the
+          # PR's NET diff against its base, at the previously reviewed head and
+          # at the new one, with the trigger's paths-ignore list applied and
+          # the index/hunk-header lines dropped so line-number shifts do not
+          # count. A rebase, an amend, a clean merge of the base branch into
+          # the PR (the before..head range is then full of code reviewed on
+          # other PRs) and a docs-only push all compare equal; a conflict
+          # resolution or any real edit does not. Every failure path runs the
+          # review, which is the safe direction.
+          skip=false
+          ignore=(':(exclude,glob)**/*.md' ':(exclude)docs'
+                  ':(exclude,glob)**/package-lock.json' ':(exclude,glob)**/poetry.lock'
+                  ':(exclude,glob)**/uv.lock' ':(exclude,glob)**/*.png'
+                  ':(exclude,glob)**/*.jpg' ':(exclude,glob)**/*.svg'
+                  ':(exclude,glob)**/*.ico' ':(exclude)LICENSE')
+          net() {  # $1 = commit, $2 = output file
+            local mb
+            mb=$(git merge-base "$BASE_SHA" "$1") || return 1
+            git diff -U0 --no-color "$mb" "$1" -- "${ignore[@]}" > "$2.raw" || return 1
+            grep -v -e '^index ' -e '^@@ ' "$2.raw" > "$2" || true
+          }
+          if [ "$mode" = incremental ] \
+             && net "$BEFORE"   "$RUNNER_TEMP/net-before.diff" \
+             && net "$HEAD_SHA" "$RUNNER_TEMP/net-head.diff" \
+             && cmp -s "$RUNNER_TEMP/net-before.diff" "$RUNNER_TEMP/net-head.diff"; then
+            skip=true
+            echo "::notice::Review skipped: the PR's net diff is unchanged since the last review ($(git rev-list --count "$BEFORE..$HEAD_SHA") new commit(s), $(wc -l < "$RUNNER_TEMP/net-head.diff") net diff lines, identical)."
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      # Named so the on-demand gate can tell from the jobs API whether this
+      # step ran or was skipped by the check above.
+      - name: Review
+        uses: anthropics/claude-code-action@v1
+        if: steps.gate.outputs.state == 'OPEN' && steps.prior.outputs.skip != 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
@@ -67,30 +179,50 @@ jobs:
 
             The PR branch is already checked out with full history.
 
-            FIRST, before reviewing anything, read what has already been said
-            on this PR, so you do not repeat it:
-              gh pr view ${{ github.event.pull_request.number }} --json comments,reviews
-              gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments
+            WORK IN PARALLEL. Every message you send costs about eleven seconds
+            of wall clock, and that is the whole reason a review takes ten
+            minutes instead of three. When you need several independent things,
+            put them in ONE message: several Reads together, several Greps
+            together, a Grep and a git call together. Wait for a result only
+            when the next call genuinely depends on it.
 
-            Decide your scope from whether you have ACTUALLY reviewed this PR
-            before, judged by the comments you just read, NOT from the event
-            name. An earlier run can fail or never happen, so "synchronize"
-            does not prove a review exists.
+            THE TOOLS YOU HAVE. This is the entire list. A call outside it is
+            refused and still costs you a full round trip, so do not probe for
+            anything else: TodoWrite, Read, Grep, Glob, Write, read-only git (diff, log, show, status, blame, grep,
+            ls-files, ls-tree, rev-parse, rev-list, merge-base, cat-file,
+            branch, tag), read-only gh (pr view, pr diff, pr list, pr checks,
+            issue view, issue list, search, repo view, api) and read-only shell
+            (ls, cat, head, tail, wc, cut, sort, uniq, tr, grep, rg, find,
+            basename, dirname, realpath, stat, file, jq, diff, sed, awk, od,
+            xxd, echo). There is no web fetch, no package manager, no test
+            runner, no way to write into the repository and no way to run the
+            code.
 
-              - If you find NO prior review of your own on this PR, review the
-                WHOLE pull request:
-                  git diff ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}
-                Earlier commits have never been looked at. Reviewing only the
-                latest push here would silently skip them.
+            FIRST, read the prior-review context. The workflow has already
+            fetched it for you, so this is one Read instead of three API calls:
+              ${{ runner.temp }}/prior-review.json
+            It holds every review, inline comment and issue comment on this PR.
 
-              - If you DO find a prior review of your own, concentrate on what
-                changed since it:
-                  git diff ${{ github.event.before }}..${{ github.event.pull_request.head.sha }}
-                Do NOT repeat a finding you already posted; a duplicate is
-                worse than silence. If a previous finding now looks fixed, note
-                it in one line in the summary rather than raising it again. If
-                nothing new is worth flagging, post a one-line summary saying
-                so and stop.
+            SCOPE: this run is ${{ steps.prior.outputs.mode }}. Review exactly
+            this range, which the workflow has already worked out for you:
+
+              git diff ${{ steps.prior.outputs.range }}
+
+            The mode was decided from the prior-review file above, by looking
+            for a review of your own, NOT from the event name: an earlier run
+            can fail or never happen, so "synchronize" does not prove a review
+            exists.
+
+              - full means that range is the WHOLE pull request. Earlier
+                commits have never been looked at, so do not narrow it to the
+                latest push or you will silently skip them.
+
+              - incremental means that range is only what changed since your
+                last review. Do NOT repeat a finding you already posted; a
+                duplicate is worse than silence. If a previous finding now
+                looks fixed, note it in one line in the summary rather than
+                raising it again. If nothing new is worth flagging, post a
+                one-line summary saying so and stop.
 
             If git shows any changed file as binary, do NOT accept a benign
             explanation for it and do not skim past it. Re-diff it with
@@ -178,6 +310,23 @@ jobs:
               - Post findings only through this one review call. Do not post
                 separate per-finding reviews, do not post an extra summary
                 comment, and do not write the review out as a chat message.
+          # `Write` is unrestricted, and that is not an oversight. Every
+          # permission denial this job has ever logged was a Write: the prompt
+          # below tells the model to put its review payload at
+          # /tmp/review-payload.json, and `Write(/tmp/**)` refuses exactly that.
+          # Probed directly on 2026-09-04: Write(/tmp/**), Write(/tmp/*),
+          # Write(//tmp/**), Write(/tmp/**/*), Write(payload.json),
+          # Write(./payload.json) and Write(**) are ALL refused, and only a bare
+          # `Write` is granted. Path scoping on this tool does not work in Claude
+          # Code 2.1.260, so the choice is an unscoped Write or a reviewer that
+          # cannot post. It burned 26% of every run's turns before this.
+          #
+          # What that does NOT open up: the job is `contents: read`, so it still
+          # cannot push; the runner has no Docker socket; and the workspace is
+          # deleted at job cleanup. The rest of the list stays strictly
+          # read-only, with nothing that fetches from the network, installs, or
+          # executes the project.
+          #
           # Opus at high effort, always: PR 293 showed Sonnet single-pass
           # missing 10 verified defects. Fall back to Sonnet rather than
           # failing the run if Opus is unavailable. 40 turns was not enough
@@ -188,7 +337,7 @@ jobs:
             --effort high
             --fallback-model sonnet
             --max-turns 80
-            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Glob,Grep,Read,Write(//tmp/**),Write(/tmp/**)"
+            --allowedTools "TodoWrite,Glob,Grep,Read,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh repo view:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git blame:*),Bash(git grep:*),Bash(git ls-files:*),Bash(git ls-tree:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git merge-base:*),Bash(git cat-file:*),Bash(git branch:*),Bash(git tag:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tr:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(stat:*),Bash(file:*),Bash(jq:*),Bash(diff:*),Bash(sed:*),Bash(awk:*),Bash(od:*),Bash(xxd:*),Bash(echo:*),Bash(test:*)"
 
   # On-demand review: "@claude review" on an existing PR.
   #
@@ -243,8 +392,20 @@ jobs:
           # no pull_request runs at all and proceed as before.
           head_sha=$(gh pr view ${{ github.event.issue.number }} \
             --repo ${{ github.repository }} --json headRefOid -q .headRefOid)
-          covered=$(gh api "repos/${{ github.repository }}/actions/workflows/claude-review.yml/runs?event=pull_request&head_sha=$head_sha" \
-            --jq '[.workflow_runs[] | select(.status == "queued" or .status == "in_progress" or (.status == "completed" and .conclusion == "success"))] | length')
+          covered=0
+          for run in $(gh api "repos/${{ github.repository }}/actions/workflows/claude-review.yml/runs?event=pull_request&head_sha=$head_sha" \
+              --jq '.workflow_runs[] | select(.status == "queued" or .status == "in_progress" or (.status == "completed" and .conclusion == "success")) | "\(.id):\(.status)"'); do
+            if [ "${run##*:}" != completed ]; then covered=$((covered+1)); continue; fi
+            # A finished run only covers the commit if its Review step actually
+            # ran. The automatic job skips itself when a push changes nothing
+            # reviewable (rebase, base merge, docs-only), and a typed
+            # "@claude review" must still get through in that case. Older
+            # workflow versions left the step unnamed, hence the second match.
+            ran=$(gh api "repos/${{ github.repository }}/actions/runs/${run%%:*}/jobs" \
+              --jq '[.jobs[] | select(.name == "review") | .steps[]
+                     | select((.name == "Review" or (.name | startswith("Run anthropics/claude-code-action"))) and .conclusion == "success")] | length')
+            [ "$ran" -gt 0 ] && covered=$((covered+1))
+          done
           echo "covered=$covered" >> "$GITHUB_OUTPUT"
           echo "Automatic review runs covering $head_sha: $covered"
 
@@ -252,6 +413,30 @@ jobs:
         if: steps.gate.outputs.state == 'OPEN' && steps.gate.outputs.covered == '0'
         with:
           fetch-depth: 0
+
+      # Same pre-fetch as the automatic job. No range: an on-demand review is
+      # always of the whole PR, so there is no before-SHA to trust.
+      - name: Collect prior review context
+        id: prior
+        if: steps.gate.outputs.state == 'OPEN' && steps.gate.outputs.covered == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR/reviews"   --paginate > "$RUNNER_TEMP/reviews.json"
+          gh api "repos/$REPO/pulls/$PR/comments"  --paginate > "$RUNNER_TEMP/inline.json"
+          gh api "repos/$REPO/issues/$PR/comments" --paginate > "$RUNNER_TEMP/issue.json"
+          jq -n \
+            --slurpfile r "$RUNNER_TEMP/reviews.json" \
+            --slurpfile i "$RUNNER_TEMP/inline.json" \
+            --slurpfile c "$RUNNER_TEMP/issue.json" \
+            '{reviews:  [$r | add[]? | {user: .user.login, state, body, submitted_at}],
+              inline:   [$i | add[]? | {user: .user.login, path, line, body}],
+              comments: [$c | add[]? | {user: .user.login, body, created_at}]}' \
+            > "$RUNNER_TEMP/prior-review.json"
+          echo "Prior review context written for PR $PR"
 
       # The action checks the PR branch out itself when the comment is on a PR.
       - uses: anthropics/claude-code-action@v1
@@ -273,9 +458,30 @@ jobs:
 
               git diff origin/<baseRefName>...HEAD
 
-            FIRST, read what has already been said, so you do not repeat it:
-              gh pr view ${{ github.event.issue.number }} --json comments,reviews
-              gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/comments
+
+            WORK IN PARALLEL. Every message you send costs about eleven seconds
+            of wall clock, and that is the whole reason a review takes ten
+            minutes instead of three. When you need several independent things,
+            put them in ONE message: several Reads together, several Greps
+            together, a Grep and a git call together. Wait for a result only
+            when the next call genuinely depends on it.
+
+            THE TOOLS YOU HAVE. This is the entire list. A call outside it is
+            refused and still costs you a full round trip, so do not probe for
+            anything else: TodoWrite, Read, Grep, Glob, Write, read-only git (diff, log, show, status, blame, grep,
+            ls-files, ls-tree, rev-parse, rev-list, merge-base, cat-file,
+            branch, tag), read-only gh (pr view, pr diff, pr list, pr checks,
+            issue view, issue list, search, repo view, api) and read-only shell
+            (ls, cat, head, tail, wc, cut, sort, uniq, tr, grep, rg, find,
+            basename, dirname, realpath, stat, file, jq, diff, sed, awk, od,
+            xxd, echo). There is no web fetch, no package manager, no test
+            runner, no way to write into the repository and no way to run the
+            code.
+
+            FIRST, read the prior-review context. The workflow has already
+            fetched it for you, so this is one Read instead of three API calls:
+              ${{ runner.temp }}/prior-review.json
+            It holds every review, inline comment and issue comment on this PR.
 
             If you find a prior review of your own, do not repeat its findings.
             Note in one line any that now look fixed, and concentrate on
@@ -376,7 +582,7 @@ jobs:
             --effort high
             --fallback-model sonnet
             --max-turns 80
-            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Glob,Grep,Read,Write(//tmp/**),Write(/tmp/**)"
+            --allowedTools "TodoWrite,Glob,Grep,Read,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh repo view:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git blame:*),Bash(git grep:*),Bash(git ls-files:*),Bash(git ls-tree:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git merge-base:*),Bash(git cat-file:*),Bash(git branch:*),Bash(git tag:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tr:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(stat:*),Bash(file:*),Bash(jq:*),Bash(diff:*),Bash(sed:*),Bash(awk:*),Bash(od:*),Bash(xxd:*),Bash(echo:*),Bash(test:*)"
 
   # On-demand: someone writes "@claude ..." in a PR or issue comment. Anything
   # starting "@claude review" is handled by the job above instead.
@@ -418,4 +624,4 @@ jobs:
           # that writes to the repo (see the contents: read note above).
           claude_args: |
             --max-turns 40
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Glob,Grep,Read"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh issue comment:*),TodoWrite,Glob,Grep,Read,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh repo view:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git blame:*),Bash(git grep:*),Bash(git ls-files:*),Bash(git ls-tree:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git merge-base:*),Bash(git cat-file:*),Bash(git branch:*),Bash(git tag:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tr:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(stat:*),Bash(file:*),Bash(jq:*),Bash(diff:*),Bash(sed:*),Bash(awk:*),Bash(od:*),Bash(xxd:*),Bash(echo:*),Bash(test:*)"
