@@ -328,12 +328,14 @@ jobs:
           # executes the project.
           #
           # Opus at high effort, always: PR 293 showed Sonnet single-pass
-          # missing 10 verified defects. Fall back to Sonnet rather than
+          # missing 10 verified defects. Pinned to Opus 5.5 by full model ID
+          # (2026-09-23); keep --effort high explicit, because 5.5 defaults
+          # to medium. Fall back to Sonnet rather than
           # failing the run if Opus is unavailable. 40 turns was not enough
           # for a PR whose main file needed --text re-diffing; 80 gives the
           # cross-codebase checks room.
           claude_args: |
-            --model opus
+            --model claude-opus-5-5
             --effort high
             --fallback-model sonnet
             --max-turns 80
@@ -578,7 +580,7 @@ jobs:
           # turns. The first on-demand run on PR 293 died at 40 turns
           # without posting anything.
           claude_args: |
-            --model opus
+            --model claude-opus-5-5
             --effort high
             --fallback-model sonnet
             --max-turns 80
@@ -623,5 +625,6 @@ jobs:
           # (the review jobs post via the reviews API instead), minus anything
           # that writes to the repo (see the contents: read note above).
           claude_args: |
+            --model claude-opus-5-5
             --max-turns 40
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh issue comment:*),TodoWrite,Glob,Grep,Read,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh repo view:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git blame:*),Bash(git grep:*),Bash(git ls-files:*),Bash(git ls-tree:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git merge-base:*),Bash(git cat-file:*),Bash(git branch:*),Bash(git tag:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tr:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(stat:*),Bash(file:*),Bash(jq:*),Bash(diff:*),Bash(sed:*),Bash(awk:*),Bash(od:*),Bash(xxd:*),Bash(echo:*),Bash(test:*)"
