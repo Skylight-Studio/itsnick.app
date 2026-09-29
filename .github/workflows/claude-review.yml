@@ -217,12 +217,21 @@ jobs:
                 commits have never been looked at, so do not narrow it to the
                 latest push or you will silently skip them.
 
-              - incremental means that range is only what changed since your
-                last review. Do NOT repeat a finding you already posted; a
-                duplicate is worse than silence. If a previous finding now
-                looks fixed, note it in one line in the summary rather than
-                raising it again. If nothing new is worth flagging, post a
-                one-line summary saying so and stop.
+              - incremental means this is a FOLLOW-UP round: the rest of the
+                PR has already been reviewed, and that range is only what
+                changed since. Keep the round small and targeted:
+                  1. From prior-review.json, list the findings from your own
+                     earlier reviews. For each one, check against the new
+                     range whether it is now fixed, and open the summary with
+                     one line per finding: fixed, partly fixed, or still open.
+                  2. Review the new range for new problems, including any the
+                     fix itself introduces. Look outside the range only where
+                     the new lines depend on it (a function they call, a
+                     caller of a function they change). Do NOT re-review code
+                     that this push did not touch; it was covered last round.
+                Do NOT repeat a finding you already posted; a duplicate is
+                worse than silence. If nothing new is worth flagging, post a
+                short summary saying so and stop.
 
             If git shows any changed file as binary, do NOT accept a benign
             explanation for it and do not skim past it. Re-diff it with
@@ -276,8 +285,8 @@ jobs:
                 comment in the SAME call. This gives the PR timeline a single
                 entry instead of one per comment. Heredocs, pipes and stdin
                 are blocked here, so FIRST use the Write tool to put the JSON
-                payload at /tmp/review-payload.json (never inside the repo
-                checkout):
+                payload at ${{ runner.temp }}/review-payload.json (never
+                inside the repo checkout, and never /tmp):
 
                   {
                     "event": "COMMENT",
@@ -290,7 +299,7 @@ jobs:
 
                 then submit it (REPO and PR NUMBER are given above):
 
-                  gh api repos/<REPO>/pulls/<PR NUMBER>/reviews --input /tmp/review-payload.json
+                  gh api repos/<REPO>/pulls/<PR NUMBER>/reviews --input ${{ runner.temp }}/review-payload.json
 
               - "event" is always COMMENT, never APPROVE or REQUEST_CHANGES.
               - Open the body with a tally, for example "2 issues, 1 minor".
@@ -312,8 +321,8 @@ jobs:
                 comment, and do not write the review out as a chat message.
           # `Write` is unrestricted, and that is not an oversight. Every
           # permission denial this job has ever logged was a Write: the prompt
-          # below tells the model to put its review payload at
-          # /tmp/review-payload.json, and `Write(/tmp/**)` refuses exactly that.
+          # above tells the model where to put its review payload, and
+          # `Write(/tmp/**)` refused exactly that.
           # Probed directly on 2026-09-04: Write(/tmp/**), Write(/tmp/*),
           # Write(//tmp/**), Write(/tmp/**/*), Write(payload.json),
           # Write(./payload.json) and Write(**) are ALL refused, and only a bare
@@ -327,17 +336,28 @@ jobs:
           # read-only, with nothing that fetches from the network, installs, or
           # executes the project.
           #
-          # Opus at high effort, always: PR 293 showed Sonnet single-pass
-          # missing 10 verified defects. Pinned to Opus 5.5 by full model ID
-          # (2026-09-23); keep --effort high explicit, because 5.5 defaults
-          # to medium. Fall back to Sonnet rather than
-          # failing the run if Opus is unavailable. 40 turns was not enough
-          # for a PR whose main file needed --text re-diffing; 80 gives the
-          # cross-codebase checks room.
+          # The payload lives in runner.temp, NOT /tmp, on purpose. The runner
+          # containers are long-lived and /tmp survives between jobs, so every
+          # review found the previous job's /tmp/review-payload.json waiting.
+          # On 2026-09-28/29 eight reviews submitted that stale file, i.e. a
+          # review of another PR (one from another repository), then posted a
+          # correction. The exact slip is not visible in the logs; a per-job
+          # path makes it impossible, because runner.temp is emptied by the
+          # runner for every job.
+          #
+          # Model by round (2026-09-29, Nick's call): the FIRST review of a PR
+          # (mode full) is Opus 5.5, because PR 293 showed a single Sonnet pass
+          # missing 10 verified defects on a whole PR. FOLLOW-UP rounds (mode
+          # incremental) are Sonnet 5.5: they only check the earlier findings
+          # and the new push, and about half of them end in "No issues found".
+          # Keep --effort high explicit for both (5.5 defaults to medium). Each
+          # falls back to the other rather than failing the run. 40 turns was
+          # not enough for a PR whose main file needed --text re-diffing; 80
+          # gives the cross-codebase checks room.
           claude_args: |
-            --model claude-opus-5-5
+            --model ${{ steps.prior.outputs.mode == 'incremental' && 'claude-sonnet-5-5' || 'claude-opus-5-5' }}
             --effort high
-            --fallback-model sonnet
+            --fallback-model ${{ steps.prior.outputs.mode == 'incremental' && 'claude-opus-5-5' || 'claude-sonnet-5-5' }}
             --max-turns 80
             --allowedTools "TodoWrite,Glob,Grep,Read,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh repo view:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git blame:*),Bash(git grep:*),Bash(git ls-files:*),Bash(git ls-tree:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git merge-base:*),Bash(git cat-file:*),Bash(git branch:*),Bash(git tag:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tr:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(stat:*),Bash(file:*),Bash(jq:*),Bash(diff:*),Bash(sed:*),Bash(awk:*),Bash(od:*),Bash(xxd:*),Bash(echo:*),Bash(test:*)"
 
@@ -542,8 +562,8 @@ jobs:
                 comment in the SAME call. This gives the PR timeline a single
                 entry instead of one per comment. Heredocs, pipes and stdin
                 are blocked here, so FIRST use the Write tool to put the JSON
-                payload at /tmp/review-payload.json (never inside the repo
-                checkout):
+                payload at ${{ runner.temp }}/review-payload.json (never
+                inside the repo checkout, and never /tmp):
 
                   {
                     "event": "COMMENT",
@@ -556,7 +576,7 @@ jobs:
 
                 then submit it (REPO and PR NUMBER are given above):
 
-                  gh api repos/<REPO>/pulls/<PR NUMBER>/reviews --input /tmp/review-payload.json
+                  gh api repos/<REPO>/pulls/<PR NUMBER>/reviews --input ${{ runner.temp }}/review-payload.json
 
               - "event" is always COMMENT, never APPROVE or REQUEST_CHANGES.
               - Open the body with a tally, for example "2 issues, 1 minor".
@@ -577,12 +597,13 @@ jobs:
                 separate per-finding reviews, do not post an extra summary
                 comment, and do not write the review out as a chat message.
           # See the automatic review job for why Opus at high effort and 80
-          # turns. The first on-demand run on PR 293 died at 40 turns
-          # without posting anything.
+          # turns, and why the payload goes in runner.temp. The first on-demand
+          # run on PR 293 died at 40 turns without posting anything. Always
+          # Opus here: an on-demand review is of the whole PR.
           claude_args: |
             --model claude-opus-5-5
             --effort high
-            --fallback-model sonnet
+            --fallback-model claude-sonnet-5-5
             --max-turns 80
             --allowedTools "TodoWrite,Glob,Grep,Read,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh repo view:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git blame:*),Bash(git grep:*),Bash(git ls-files:*),Bash(git ls-tree:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git merge-base:*),Bash(git cat-file:*),Bash(git branch:*),Bash(git tag:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tr:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(stat:*),Bash(file:*),Bash(jq:*),Bash(diff:*),Bash(sed:*),Bash(awk:*),Bash(od:*),Bash(xxd:*),Bash(echo:*),Bash(test:*)"
 
