@@ -27,6 +27,11 @@ on:
   issue_comment:
     types: [created]
 
+# Default for any job without its own block (SEC-S6-04); each job below
+# declares exactly what it needs.
+permissions:
+  contents: read
+
 jobs:
   # Automatic review: runs on open and on every subsequent push to the branch,
   # except a push that changes nothing reviewable (see the skip check below).
@@ -61,10 +66,17 @@ jobs:
             --repo ${{ github.repository }} --json state -q .state)
           echo "state=$state" >> "$GITHUB_OUTPUT"
           echo "PR state: $state"
+          # The fix step only trusts a review posted after this moment.
+          echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
+      # The PR HEAD, not the default merge ref: a fix has to be committed on
+      # top of the branch's real head. The range logic below only ever uses
+      # BASE_SHA, HEAD_SHA and BEFORE by SHA, and the full clone carries the
+      # base branch, so it works the same on either checkout.
       - uses: actions/checkout@v6
         if: steps.gate.outputs.state == 'OPEN'
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       # The agent used to open every review by asking the API what had already
@@ -83,6 +95,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           set -euo pipefail
           gh api "repos/$REPO/pulls/$PR/reviews"   --paginate > "$RUNNER_TEMP/reviews.json"
@@ -160,9 +173,30 @@ jobs:
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
+          fix_ok=false
+          if [ "$mode" = full ]; then fix_ok=true; fi
+          # Fix mode (2026-11-20): only an Opus round of the WHOLE PR may edit, and
+          # the workflow commits what it edits. Follow-up rounds stay comment-only,
+          # which is what stops a loop: fix commit -> Sonnet round checks it -> no
+          # edit. The subject checks are a second stop in case the mode decision
+          # ever misfires (a deleted review, an API hiccup): never fix on top of
+          # the reviewer's own fix, and never more than three fixes per PR.
+          fix=false
+          head_subject=$(git log -1 --format=%s "$HEAD_SHA")
+          fixes_so_far=$(git log --format=%s "$BASE_SHA..$HEAD_SHA" | grep -ci '^review fix:' || true)
+          if [ "$fix_ok" != true ]; then why="comment-only round (follow-up)"
+          elif [ "${HEAD_REPO,,}" != "${REPO,,}" ]; then why="the PR comes from a fork"
+          elif [[ "${head_subject,,}" == "review fix:"* ]]; then why="the head commit is the reviewer's own fix"
+          elif [ "$fixes_so_far" -ge 3 ]; then why="this PR already has $fixes_so_far review-fix commits"
+          else fix=true; why="Opus round on a same-repo PR"
+          fi
+          echo "fix=$fix" >> "$GITHUB_OUTPUT"
+          echo "Fix mode: $fix ($why)"
+
       # Named so the on-demand gate can tell from the jobs API whether this
       # step ran or was skipped by the check above.
       - name: Review
+        id: review
         uses: anthropics/claude-code-action@v1
         if: steps.gate.outputs.state == 'OPEN' && steps.prior.outputs.skip != 'true'
         with:
@@ -188,14 +222,16 @@ jobs:
 
             THE TOOLS YOU HAVE. This is the entire list. A call outside it is
             refused and still costs you a full round trip, so do not probe for
-            anything else: TodoWrite, Read, Grep, Glob, Write, read-only git (diff, log, show, status, blame, grep,
+            anything else: TodoWrite, Read, Grep, Glob, Write, Edit (fix mode only), read-only git (diff, log, show, status, blame,
             ls-files, ls-tree, rev-parse, rev-list, merge-base, cat-file,
             branch, tag), read-only gh (pr view, pr diff, pr list, pr checks,
-            issue view, issue list, search, repo view, api) and read-only shell
-            (ls, cat, head, tail, wc, cut, sort, uniq, tr, grep, rg, find,
-            basename, dirname, realpath, stat, file, jq, diff, sed, awk, od,
-            xxd, echo). There is no web fetch, no package manager, no test
-            runner, no way to write into the repository and no way to run the
+            issue view, issue list, search, repo view), the ONE gh api call
+            that posts your review (below, exactly as written) and read-only
+            shell (ls, cat, head, tail, wc, cut, tr, grep, basename, dirname,
+            realpath, stat, file, jq, diff, od, echo), and Edit when fix mode
+            is true (see FIXING below). Use Grep and Glob, not find, sed or
+            awk. There is no web fetch, no package manager, no test runner, no
+            git command that writes, no way to push and no way to run the
             code.
 
             FIRST, read the prior-review context. The workflow has already
@@ -232,6 +268,11 @@ jobs:
                 Do NOT repeat a finding you already posted; a duplicate is
                 worse than silence. If nothing new is worth flagging, post a
                 short summary saying so and stop.
+                A commit whose subject starts "review fix:" is an earlier
+                round of this reviewer fixing its own findings on the branch.
+                It gets no special trust: check it like any other change in
+                the range, that each fix is correct and complete and breaks
+                nothing, and report it if not. This round never edits files.
 
             If git shows any changed file as binary, do NOT accept a benign
             explanation for it and do not skim past it. Re-diff it with
@@ -279,6 +320,70 @@ jobs:
             and line that demonstrates it; do not infer it from a function
             name. A false positive costs the author more than a missed nit.
 
+            FIXING. Fix mode for this run: ${{ steps.prior.outputs.fix }}.
+
+            If it is false, skip the rest of this section: do not create, edit or
+            delete any file in the repository, and post the review exactly as
+            described under "How to post".
+
+            If it is true, you may correct a finding yourself with the Edit tool. The
+            workflow then commits your edits onto the PR branch as ONE commit, after
+            you finish. You cannot run git commands that write, you cannot push, and
+            you cannot run the code or its tests, so be conservative. A wrong fix
+            pushed onto someone's branch costs far more than a comment.
+
+              Fix a finding only when ALL of these hold:
+                - you verified it, and can cite the file:line that proves it;
+                - there is exactly one obviously correct fix, which the author would
+                  accept without discussion;
+                - the fix is small and local: a few lines, one or two files, no new
+                  dependency, no change to an interface or to behaviour beyond the bug.
+
+              Never fix these; leave them as comments:
+                - anything that needs a product, design or business decision;
+                - migrations, schema or model changes, seed or fixture data;
+                - dependency manifests and lockfiles;
+                - anything under .github/;
+                - CLAUDE.md, AGENTS.md, .claude/, .mcp.json, .gitmodules, .husky/
+                  (the workflow discards edits to these);
+                - anything that deletes data, or changes what gets deleted;
+                - refactors, renames, formatting, style, comments and docs;
+                - tests, unless the bug is in the test itself;
+                - anything you are not sure about.
+
+              The workflow refuses the WHOLE commit, and posts your patch as a comment
+              instead, if it touches .github/, deletes or renames a file, touches a
+              binary file, or exceeds 10 files or 200 changed lines. Stay well under.
+
+              Use Edit on files that already exist in the repository, and nothing
+              else. Write is only for the two files in ${{ runner.temp }}; never
+              Write a file inside the repository.
+
+              After your last edit, Read every file you changed again around each
+              edit and check: the syntax is valid, indentation matches its
+              surroundings, every name you use exists (Grep for it), and the fix does
+              exactly what you will say it does. If any doubt remains, put the code
+              back with Edit and leave that finding as a comment.
+
+              Finish every edit BEFORE you post the review, and edit nothing after it.
+
+              When you fixed at least one finding:
+                - Write the commit message to ${{ runner.temp }}/review-fix-message.txt:
+                  first line a summary of what changed, under 60 characters, with no
+                  prefix (the workflow adds "review fix: "), then a blank line, then
+                  one line per fix as path:line and what was wrong. No sign-off, no
+                  co-author line, no attribution of any kind.
+                - Open the review body with "Fixed in the commit that follows:" and
+                  one line per fix (path:line, what was wrong, what you changed), then
+                  a blank line, then the tally of what is LEFT, for example
+                  "2 issues left as comments, 1 minor."
+                - Do not post an inline comment for a finding you fixed. The inline
+                  comments are only for what is left, and they anchor to the code as
+                  it is in the PR now, before your fix (the commit lands after the
+                  review).
+              If you fixed nothing, do not write the message file; post the review
+              exactly as described under "How to post".
+
             How to post:
               - Post the whole round as ONE review submission: the summary as
                 the review body, every line-anchored finding as an inline
@@ -297,12 +402,15 @@ jobs:
                     ]
                   }
 
-                then submit it (REPO and PR NUMBER are given above):
+                then submit it with exactly this command (the only gh api call
+                you are allowed; any other spelling is refused):
 
-                  gh api repos/<REPO>/pulls/<PR NUMBER>/reviews --input ${{ runner.temp }}/review-payload.json
+                  gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews --input ${{ runner.temp }}/review-payload.json
 
               - "event" is always COMMENT, never APPROVE or REQUEST_CHANGES.
-              - Open the body with a tally, for example "2 issues, 1 minor".
+              - Open the body with a tally, for example "2 issues, 1 minor"
+                (after the "Fixed in the commit that follows:" block, if
+                you fixed anything; see FIXING).
                 If you found nothing, the body is "No issues found" and
                 "comments" is an empty array (still one review, so the PR
                 shows it was looked at).
@@ -330,11 +438,31 @@ jobs:
           # Code 2.1.260, so the choice is an unscoped Write or a reviewer that
           # cannot post. It burned 26% of every run's turns before this.
           #
-          # What that does NOT open up: the job is `contents: read`, so it still
-          # cannot push; the runner has no Docker socket; and the workspace is
-          # deleted at job cleanup. The rest of the list stays strictly
+          # What that does NOT open up: there is no git write command and no
+          # push in the list, the runner has no Docker socket, and the workspace
+          # is deleted at job cleanup. The rest of the list stays strictly
           # read-only, with nothing that fetches from the network, installs, or
-          # executes the project.
+          # executes the project. (Correction 2026-11-20: `contents: read` was
+          # never what stopped a push. The action puts the Claude GitHub App's
+          # own token, which has contents AND workflows write, into the origin
+          # URL for the whole session. The allow list is the only barrier.)
+          #
+          # --permission-mode default (2026-11-20): since claude-code-action
+          # 2026-11-12 (#2004) agent runs default to `auto`, where a safety
+          # classifier can approve a call NO allow rule covers, `git push` with
+          # that App token included. `default` restores the behaviour this list
+          # was built against: anything not listed is refused.
+          #
+          # Edit is added only when fix mode is on (an Opus round of the whole
+          # PR on a same-repo branch); the commit step below does the commit.
+          #
+          # SEC-S6-06 (2026-10-24): the read list holds no command that can run
+          # another one or write a file. Gone: sed (`e`, `w`), awk (`system`),
+          # find (`-exec`), rg (`--pre`), git grep (`-O`), sort/uniq (output
+          # file), xxd (`-r`). `gh api:*` became the one exact review POST, so
+          # the PR's text cannot steer the bot into other GitHub writes (an
+          # APPROVE, a PR edit). The prior comments it needs are fetched above
+          # into prior-review.json.
           #
           # The payload lives in runner.temp, NOT /tmp, on purpose. The runner
           # containers are long-lived and /tmp survives between jobs, so every
@@ -359,7 +487,259 @@ jobs:
             --effort high
             --fallback-model ${{ steps.prior.outputs.mode == 'incremental' && 'claude-opus-5-5' || 'claude-sonnet-5-5' }}
             --max-turns 80
-            --allowedTools "TodoWrite,Glob,Grep,Read,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh repo view:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git blame:*),Bash(git grep:*),Bash(git ls-files:*),Bash(git ls-tree:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git merge-base:*),Bash(git cat-file:*),Bash(git branch:*),Bash(git tag:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tr:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(stat:*),Bash(file:*),Bash(jq:*),Bash(diff:*),Bash(sed:*),Bash(awk:*),Bash(od:*),Bash(xxd:*),Bash(echo:*),Bash(test:*)"
+            --permission-mode default
+            --allowedTools "TodoWrite,Glob,Grep,Read,Write${{ steps.prior.outputs.fix == 'true' && ',Edit' || '' }},Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh repo view:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git blame:*),Bash(git ls-files:*),Bash(git ls-tree:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git merge-base:*),Bash(git cat-file:*),Bash(git branch:*),Bash(git tag:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(cut:*),Bash(tr:*),Bash(grep:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(stat:*),Bash(file:*),Bash(jq:*),Bash(diff:*),Bash(od:*),Bash(echo:*),Bash(test:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews --input ${{ runner.temp }}/review-payload.json)"
+
+      # The model only edits; this step commits and pushes, and every guard
+      # is here in shell rather than in the prompt. It runs after the review
+      # is posted, so the inline anchors point at the pre-fix head, and the
+      # push is the last thing the job does: the push starts a new run in
+      # this PR's concurrency group, and cancel-in-progress can then only
+      # cancel a job that has nothing left to do. Not gated on the action's
+      # success: a run that edited and then failed still gets its patch
+      # posted (or nothing, if it changed nothing).
+      #
+      # FALLBACK: with no usable REVIEW_PUSH_KEY, 'comment' (default) posts
+      # the patch instead of pushing. 'token' pushes with GITHUB_TOKEN, which
+      # starts NO workflow on the fix commit (no CI, no follow-up review) and
+      # needs `contents: write` on this job; change both together.
+      - name: Commit and push the review fix
+        if: ${{ !cancelled() && steps.review.outcome != 'skipped' && steps.prior.outputs.fix == 'true' }}
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          FIX_ENABLED: ${{ steps.prior.outputs.fix }}
+          RUN_STARTED: ${{ steps.gate.outputs.started }}
+          FALLBACK: comment
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_PUSH_TOKEN: ${{ github.token }}
+          PUSH_KEY: ${{ secrets.REVIEW_PUSH_KEY }}
+        run: |
+          # shellcheck disable=SC2016
+          # (single-quoted $ strings below are deliberate: jq programs, a trap, a git credential helper)
+          set -euo pipefail
+          # Everything here is enforced in shell, not in the prompt. The session that
+          # just ended could write files anywhere this user can (bare Write), so trust
+          # nothing it could have planted: absolute binaries, a fixed PATH, no global
+          # or system git config, no hooks, no fsmonitor, and an audit of the repo's
+          # own git config before git touches the working tree.
+          export PATH=/usr/bin:/bin
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          export GIT_CONFIG_COUNT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false
+          unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_EXEC_PATH \
+                GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_SSH GIT_SSH_COMMAND GIT_PROXY_COMMAND
+          GIT=/usr/bin/git
+          GH=/usr/bin/gh
+          SSH=/usr/bin/ssh
+          JQ=/usr/bin/jq
+          SSH_URL="git@github.com:${REPO}.git"
+          HTTPS_URL="https://github.com/${REPO}.git"
+          MAX_FILES=10
+          MAX_LINES=200
+
+          T="$RUNNER_TEMP/review-fix"
+          /bin/mkdir -p "$T"
+          trap '/bin/rm -f "$T/key" "$T/known_hosts"' EXIT
+          MSG_FILE="$RUNNER_TEMP/review-fix-message.txt"
+
+          g() {
+            "$GIT" -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+                   -c commit.gpgsign=false -c core.pager=cat "$@"
+          }
+
+          # One PR comment for every outcome that is not a clean push, so a review
+          # that says "Fixed in the commit that follows" never points at nothing.
+          refuse() {  # $1 = reason (one sentence), $2 = "patch" to attach the diff
+            local reason=$1 body="$T/comment.md"
+            echo "::warning::Review fix not pushed: $reason"
+            {
+              echo "**The review's fix was not pushed.** $reason"
+              echo
+              echo "Nothing was committed, so whatever the review lists as fixed is still open on this branch."
+              if [ "${2:-}" = patch ] && [ -s "$T/fix.patch" ]; then
+                local n
+                n=$(/usr/bin/wc -l < "$T/fix.patch")
+                echo
+                echo "This is the change it made, to apply by hand if you agree with it ($n lines):"
+                echo
+                echo '~~~~~~diff'
+                /usr/bin/head -c 50000 "$T/fix.patch" | /usr/bin/head -n 400
+                echo '~~~~~~'
+                if [ "$n" -gt 400 ] || [ "$(/usr/bin/wc -c < "$T/fix.patch")" -gt 50000 ]; then
+                  echo
+                  echo "(truncated)"
+                fi
+              fi
+            } > "$body"
+            "$JQ" -n --rawfile b "$body" '{body: $b}' > "$T/comment.json"
+            "$GH" api "repos/$REPO/issues/$PR/comments" --input "$T/comment.json" > /dev/null \
+              || echo "::warning::Could not post the refusal comment either."
+            exit 0
+          }
+
+          if [ "${FIX_ENABLED:-false}" != true ]; then
+            echo "Fix mode is off for this run; nothing to commit."
+            exit 0
+          fi
+
+          # Did this run's review say it fixed something? Read back from GitHub, not
+          # from anything the session left on disk.
+          "$GH" api "repos/$REPO/pulls/$PR/reviews" --paginate > "$T/reviews.json"
+          said_fixed=$("$JQ" -s --arg since "$RUN_STARTED" \
+            '[add[]? | select((.user.login | test("claude"; "i")) and (.submitted_at // "") >= $since)
+                      | select((.body // "") | test("fixed in the commit that follows"; "i"))] | length' \
+            "$T/reviews.json")
+          posted=$("$JQ" -s --arg since "$RUN_STARTED" \
+            '[add[]? | select((.user.login | test("claude"; "i")) and (.submitted_at // "") >= $since)] | length' \
+            "$T/reviews.json")
+
+          # Refuse git config that can run a program, redirect a URL or supply a
+          # credential. The action restores .git/config after the session, so this
+          # should never fire; if it does, something tampered with the checkout.
+          # Plain "$GIT", not g(): the audit is of the config FILES, and g() adds -c
+          # overrides of its own that would show up in the listing.
+          bad=$("$GIT" config --list --includes --name-only 2>/dev/null \
+            | /usr/bin/grep -iE '^(core\.(fsmonitor|sshcommand|askpass|pager|editor|hookspath|gitproxy|attributesfile)|credential\.|filter\.|gpg\.|uploadpack\.|receivepack\.|alias\.|diff\..*\.(textconv|command)|merge\..*\.driver|remote\..*\.(uploadpack|receivepack|vcs|proxy|pushurl)|url\..*|http\..*\.(proxy|sslcainfo|cookiefile)|http\.proxy|core\.sshcommand)' || true)
+          if [ -n "$bad" ]; then
+            refuse "The checkout's git config carries settings this step will not run git with ($(echo "$bad" | /usr/bin/tr '\n' ' '))."
+          fi
+
+          if [ "$(g rev-parse HEAD)" != "$HEAD_SHA" ]; then
+            refuse "The checkout is not at the PR head commit it was reviewed at."
+          fi
+
+          # claude-code-action replaces these with the base branch's copies before the
+          # session starts (a PR cannot plant config the CLI acts on). Put the PR's own
+          # versions back so that swap is never committed onto the PR branch.
+          for p in .claude .mcp.json .claude.json .gitmodules .ripgreprc CLAUDE.md CLAUDE.local.md AGENTS.md .husky; do
+            if [ -n "$(g ls-tree --name-only HEAD -- "$p")" ]; then
+              g checkout -q HEAD -- "$p"
+            fi
+          done
+
+          # Tracked files only: notes, the snapshot dir and anything else new stay out.
+          g add -u
+          g diff --cached --no-ext-diff --no-textconv --binary > "$T/fix.patch"
+          if [ ! -s "$T/fix.patch" ]; then
+            if [ "$said_fixed" -gt 0 ] || [ -s "$MSG_FILE" ]; then
+              refuse "The review says it fixed something, but no tracked file changed."
+            fi
+            echo "No tracked file changed; nothing to commit."
+            exit 0
+          fi
+
+          g diff --cached --name-status -z --no-renames > "$T/status"
+          g diff --cached --numstat -z --no-renames --no-ext-diff --no-textconv > "$T/numstat"
+          files=0; lines=0; problem=""
+          while IFS= read -r -d '' st && IFS= read -r -d '' path; do
+            files=$((files + 1))
+            case "$st" in
+              M) ;;
+              D) problem="it deletes $path" ;;
+              T) problem="it changes the file type of $path" ;;
+              *) problem="it changes $path in a way this step does not commit ($st)" ;;
+            esac
+            case "$path" in
+              .github/*) problem="it changes $path, and nothing under .github/ is ever committed by the reviewer" ;;
+            esac
+          done < "$T/status"
+          # numstat -z: "added<TAB>deleted<TAB>path<NUL>"; binary files show "-".
+          while IFS= read -r -d '' rec; do
+            a=${rec%%$'\t'*}; rest=${rec#*$'\t'}; d=${rest%%$'\t'*}
+            if [ "$a" = - ] || [ "$d" = - ]; then
+              problem="it changes a binary file (${rest#*$'\t'})"
+            else
+              lines=$((lines + a + d))
+            fi
+          done < "$T/numstat"
+          if [ "$(g diff --cached --summary | /usr/bin/grep -c 'mode change' || true)" -gt 0 ]; then
+            problem="it changes a file mode"
+          fi
+          [ -z "$problem" ] && [ "$files" -gt "$MAX_FILES" ] && problem="it touches $files files (the cap is $MAX_FILES)"
+          [ -z "$problem" ] && [ "$lines" -gt "$MAX_LINES" ] && problem="it changes $lines lines (the cap is $MAX_LINES)"
+          [ -n "$problem" ] && refuse "The fix was refused because $problem." patch
+
+          if [ "$posted" -eq 0 ]; then
+            refuse "The review itself was not posted, so a fix would land with no explanation." patch
+          fi
+          if [ "$said_fixed" -eq 0 ]; then
+            refuse "Files were changed, but the review does not say what it fixed." patch
+          fi
+
+          # Commit message: the session's summary if it wrote one, never any
+          # attribution line, always the "review fix:" prefix.
+          summary=""; body=""
+          if [ -s "$MSG_FILE" ]; then
+            /usr/bin/tr -d '\r' < "$MSG_FILE" \
+              | /usr/bin/grep -viE '^[[:space:]]*(co-authored-by|signed-off-by|generated (with|by)|🤖)|anthropic\.com|claude\.com/claude-code' \
+              > "$T/msg.clean" || true
+            summary=$(/usr/bin/grep -m1 -v '^[[:space:]]*$' "$T/msg.clean" || true)
+            body=$(/usr/bin/awk -v s="$summary" 'f{print} !f && $0==s {f=1}' "$T/msg.clean" \
+                   | /usr/bin/sed '/./,$!d' | /usr/bin/head -n 40)
+            summary=$(printf '%s' "$summary" | /usr/bin/sed -E 's/^[[:space:]]*(review fix:[[:space:]]*)?//I' | /usr/bin/cut -c1-60)
+          fi
+          [ -n "$summary" ] || summary="address findings from the automated review"
+          { printf 'review fix: %s\n' "$summary"; [ -n "$body" ] && printf '\n%s\n' "$body"; } > "$T/commit-msg"
+
+          # Author and committer: whoever wrote the PR's head commit, so Vercel sees a
+          # team member and blame stays with the PR's owner. The subject says what it is.
+          name=$(g log -1 --format=%an "$HEAD_SHA")
+          email=$(g log -1 --format=%ae "$HEAD_SHA")
+          GIT_AUTHOR_NAME="$name" GIT_AUTHOR_EMAIL="$email" \
+          GIT_COMMITTER_NAME="$name" GIT_COMMITTER_EMAIL="$email" \
+            g -c user.name="$name" -c user.email="$email" commit -q --no-verify -F "$T/commit-msg"
+          new_sha=$(g rev-parse HEAD)
+          echo "Committed $new_sha ($files file(s), $lines line(s)): $(/usr/bin/head -n1 "$T/commit-msg")"
+
+          # Push: deploy key if there is one (CI and the follow-up review then run on
+          # the fix), never force. A push with GITHUB_TOKEN starts no workflow at all,
+          # so that fallback is opt-in; the default posts the patch instead.
+          push_log="$T/push.log"
+          if [ -n "${PUSH_KEY:-}" ] && [ -x "$SSH" ]; then
+            umask 077
+            printf '%s\n' "$PUSH_KEY" > "$T/key"
+            # Pinned from `gh api meta` (2026-11-20, SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU).
+            echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$T/known_hosts"
+            export GIT_SSH_COMMAND="$SSH -F /dev/null -i $T/key -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$T/known_hosts -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=20"
+            rc=0
+            /usr/bin/timeout 120 "$GIT" -c core.hooksPath=/dev/null push --no-verify --porcelain \
+              "$SSH_URL" "HEAD:refs/heads/$HEAD_REF" > "$push_log" 2>&1 || rc=$?
+            /bin/rm -f "$T/key"
+            how="deploy key"
+          else
+            if [ -n "${PUSH_KEY:-}" ]; then
+              echo "::warning::REVIEW_PUSH_KEY is set but this runner has no ssh client ($SSH)."
+            else
+              echo "::warning::No REVIEW_PUSH_KEY secret on this repository."
+            fi
+            if [ "${FALLBACK:-comment}" != token ]; then
+              refuse "This repository cannot push it yet (no usable REVIEW_PUSH_KEY deploy key on this runner)." patch
+            fi
+            echo "::warning::Pushing with GITHUB_TOKEN: CI and the follow-up review will NOT run on the fix commit."
+            rc=0
+            PUSH_TOKEN="$GITHUB_PUSH_TOKEN" /usr/bin/timeout 120 "$GIT" -c core.hooksPath=/dev/null \
+              -c credential.helper= -c 'credential.https://github.com.helper=' \
+              -c 'credential.https://github.com.helper=!f() { echo username=x-access-token; echo "password=$PUSH_TOKEN"; }; f' \
+              -c 'http.https://github.com/.extraheader=' \
+              push --no-verify --porcelain "$HTTPS_URL" "HEAD:refs/heads/$HEAD_REF" > "$push_log" 2>&1 || rc=$?
+            how="GITHUB_TOKEN"
+          fi
+          /bin/sed -E 's#(https://)[^@/]*@#\1***@#g' "$push_log"
+          if [ "$rc" -ne 0 ]; then
+            if /usr/bin/grep -qiE 'non-fast-forward|fetch first|\[rejected\]|stale info' "$push_log"; then
+              refuse "The PR branch moved while the review ran, so the fix no longer applies cleanly on top of it." patch
+            fi
+            refuse "The push to $HEAD_REF failed ($how, exit $rc)." patch
+          fi
+          echo "::notice::Review fix $new_sha pushed to $HEAD_REF via $how."
+          {
+            echo "### Review fix pushed"
+            echo
+            echo "\`$new_sha\` on \`$HEAD_REF\` via $how: $(/usr/bin/head -n1 "$T/commit-msg")"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # On-demand review: "@claude review" on an existing PR.
   #
@@ -405,6 +785,20 @@ jobs:
           echo "state=$state" >> "$GITHUB_OUTPUT"
           echo "PR state: $state"
 
+          # Everything the job needs about the PR, in one call: there is no
+          # pull_request payload on a comment event.
+          gh pr view ${{ github.event.issue.number }} --repo ${{ github.repository }} \
+            --json headRefOid,headRefName,baseRefName,headRepository,headRepositoryOwner \
+            > "$RUNNER_TEMP/pr.json"
+          head_sha=$(jq -r .headRefOid "$RUNNER_TEMP/pr.json")
+          {
+            echo "head_sha=$head_sha"
+            echo "head_ref=$(jq -r .headRefName "$RUNNER_TEMP/pr.json")"
+            echo "base_ref=$(jq -r .baseRefName "$RUNNER_TEMP/pr.json")"
+            echo "head_repo=$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' "$RUNNER_TEMP/pr.json")"
+            echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
           # Skip when the AUTOMATIC review job is already queued, running, or
           # finished successfully for the PR's current head commit: a push and
           # an "@claude review" comment seconds apart otherwise produce two
@@ -412,8 +806,6 @@ jobs:
           # Failed and cancelled runs do not count, so this job still serves
           # as the retry path, and PRs from before the workflow existed have
           # no pull_request runs at all and proceed as before.
-          head_sha=$(gh pr view ${{ github.event.issue.number }} \
-            --repo ${{ github.repository }} --json headRefOid -q .headRefOid)
           covered=0
           for run in $(gh api "repos/${{ github.repository }}/actions/workflows/claude-review.yml/runs?event=pull_request&head_sha=$head_sha" \
               --jq '.workflow_runs[] | select(.status == "queued" or .status == "in_progress" or (.status == "completed" and .conclusion == "success")) | "\(.id):\(.status)"'); do
@@ -431,9 +823,17 @@ jobs:
           echo "covered=$covered" >> "$GITHUB_OUTPUT"
           echo "Automatic review runs covering $head_sha: $covered"
 
+      # Check out the PR head explicitly. On issue_comment, actions/checkout
+      # alone gives the DEFAULT branch, and claude-code-action does not check
+      # anything out in agent mode (a prompt is set): only tag mode does
+      # (verified in its source, src/modes/agent/index.ts, 2026-11-20). The
+      # old comment here claimed the action checked the PR out; it did not,
+      # so "git diff origin/<base>...HEAD" compared the base with the default
+      # branch.
       - uses: actions/checkout@v6
         if: steps.gate.outputs.state == 'OPEN' && steps.gate.outputs.covered == '0'
         with:
+          ref: ${{ steps.gate.outputs.head_sha }}
           fetch-depth: 0
 
       # Same pre-fetch as the automatic job. No range: an on-demand review is
@@ -445,6 +845,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.issue.number }}
+          HEAD_SHA: ${{ steps.gate.outputs.head_sha }}
+          BASE_REF: ${{ steps.gate.outputs.base_ref }}
+          HEAD_REPO: ${{ steps.gate.outputs.head_repo }}
         run: |
           set -euo pipefail
           gh api "repos/$REPO/pulls/$PR/reviews"   --paginate > "$RUNNER_TEMP/reviews.json"
@@ -460,8 +863,28 @@ jobs:
             > "$RUNNER_TEMP/prior-review.json"
           echo "Prior review context written for PR $PR"
 
-      # The action checks the PR branch out itself when the comment is on a PR.
-      - uses: anthropics/claude-code-action@v1
+          fix_ok=true
+          # Fix mode (2026-11-20): only an Opus round of the WHOLE PR may edit, and
+          # the workflow commits what it edits. Follow-up rounds stay comment-only,
+          # which is what stops a loop: fix commit -> Sonnet round checks it -> no
+          # edit. The subject checks are a second stop in case the mode decision
+          # ever misfires (a deleted review, an API hiccup): never fix on top of
+          # the reviewer's own fix, and never more than three fixes per PR.
+          fix=false
+          head_subject=$(git log -1 --format=%s "$HEAD_SHA")
+          fixes_so_far=$(git log --format=%s "origin/$BASE_REF..$HEAD_SHA" | grep -ci '^review fix:' || true)
+          if [ "$fix_ok" != true ]; then why="comment-only round (follow-up)"
+          elif [ "${HEAD_REPO,,}" != "${REPO,,}" ]; then why="the PR comes from a fork"
+          elif [[ "${head_subject,,}" == "review fix:"* ]]; then why="the head commit is the reviewer's own fix"
+          elif [ "$fixes_so_far" -ge 3 ]; then why="this PR already has $fixes_so_far review-fix commits"
+          else fix=true; why="Opus round on a same-repo PR"
+          fi
+          echo "fix=$fix" >> "$GITHUB_OUTPUT"
+          echo "Fix mode: $fix ($why)"
+
+      - name: Review on demand
+        id: review
+        uses: anthropics/claude-code-action@v1
         if: steps.gate.outputs.state == 'OPEN' && steps.gate.outputs.covered == '0'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -471,15 +894,12 @@ jobs:
             REPO:       ${{ github.repository }}
             PR NUMBER:  ${{ github.event.issue.number }}
 
-            The PR branch is already checked out with full history. There is no
-            pull_request payload on this event, so establish the range yourself:
+            BASE BRANCH: ${{ steps.gate.outputs.base_ref }}
+            HEAD SHA:   ${{ steps.gate.outputs.head_sha }}
 
-              gh pr view ${{ github.event.issue.number }} --json baseRefName,headRefName,headRefOid
+            The PR head is checked out with full history. Review the whole PR:
 
-            then review the whole PR:
-
-              git diff origin/<baseRefName>...HEAD
-
+              git diff origin/${{ steps.gate.outputs.base_ref }}...${{ steps.gate.outputs.head_sha }}
 
             WORK IN PARALLEL. Every message you send costs about eleven seconds
             of wall clock, and that is the whole reason a review takes ten
@@ -490,14 +910,16 @@ jobs:
 
             THE TOOLS YOU HAVE. This is the entire list. A call outside it is
             refused and still costs you a full round trip, so do not probe for
-            anything else: TodoWrite, Read, Grep, Glob, Write, read-only git (diff, log, show, status, blame, grep,
+            anything else: TodoWrite, Read, Grep, Glob, Write, Edit (fix mode only), read-only git (diff, log, show, status, blame,
             ls-files, ls-tree, rev-parse, rev-list, merge-base, cat-file,
             branch, tag), read-only gh (pr view, pr diff, pr list, pr checks,
-            issue view, issue list, search, repo view, api) and read-only shell
-            (ls, cat, head, tail, wc, cut, sort, uniq, tr, grep, rg, find,
-            basename, dirname, realpath, stat, file, jq, diff, sed, awk, od,
-            xxd, echo). There is no web fetch, no package manager, no test
-            runner, no way to write into the repository and no way to run the
+            issue view, issue list, search, repo view), the ONE gh api call
+            that posts your review (below, exactly as written) and read-only
+            shell (ls, cat, head, tail, wc, cut, tr, grep, basename, dirname,
+            realpath, stat, file, jq, diff, od, echo), and Edit when fix mode
+            is true (see FIXING below). Use Grep and Glob, not find, sed or
+            awk. There is no web fetch, no package manager, no test runner, no
+            git command that writes, no way to push and no way to run the
             code.
 
             FIRST, read the prior-review context. The workflow has already
@@ -556,6 +978,70 @@ jobs:
             and line that demonstrates it; do not infer it from a function
             name. A false positive costs the author more than a missed nit.
 
+            FIXING. Fix mode for this run: ${{ steps.prior.outputs.fix }}.
+
+            If it is false, skip the rest of this section: do not create, edit or
+            delete any file in the repository, and post the review exactly as
+            described under "How to post".
+
+            If it is true, you may correct a finding yourself with the Edit tool. The
+            workflow then commits your edits onto the PR branch as ONE commit, after
+            you finish. You cannot run git commands that write, you cannot push, and
+            you cannot run the code or its tests, so be conservative. A wrong fix
+            pushed onto someone's branch costs far more than a comment.
+
+              Fix a finding only when ALL of these hold:
+                - you verified it, and can cite the file:line that proves it;
+                - there is exactly one obviously correct fix, which the author would
+                  accept without discussion;
+                - the fix is small and local: a few lines, one or two files, no new
+                  dependency, no change to an interface or to behaviour beyond the bug.
+
+              Never fix these; leave them as comments:
+                - anything that needs a product, design or business decision;
+                - migrations, schema or model changes, seed or fixture data;
+                - dependency manifests and lockfiles;
+                - anything under .github/;
+                - CLAUDE.md, AGENTS.md, .claude/, .mcp.json, .gitmodules, .husky/
+                  (the workflow discards edits to these);
+                - anything that deletes data, or changes what gets deleted;
+                - refactors, renames, formatting, style, comments and docs;
+                - tests, unless the bug is in the test itself;
+                - anything you are not sure about.
+
+              The workflow refuses the WHOLE commit, and posts your patch as a comment
+              instead, if it touches .github/, deletes or renames a file, touches a
+              binary file, or exceeds 10 files or 200 changed lines. Stay well under.
+
+              Use Edit on files that already exist in the repository, and nothing
+              else. Write is only for the two files in ${{ runner.temp }}; never
+              Write a file inside the repository.
+
+              After your last edit, Read every file you changed again around each
+              edit and check: the syntax is valid, indentation matches its
+              surroundings, every name you use exists (Grep for it), and the fix does
+              exactly what you will say it does. If any doubt remains, put the code
+              back with Edit and leave that finding as a comment.
+
+              Finish every edit BEFORE you post the review, and edit nothing after it.
+
+              When you fixed at least one finding:
+                - Write the commit message to ${{ runner.temp }}/review-fix-message.txt:
+                  first line a summary of what changed, under 60 characters, with no
+                  prefix (the workflow adds "review fix: "), then a blank line, then
+                  one line per fix as path:line and what was wrong. No sign-off, no
+                  co-author line, no attribution of any kind.
+                - Open the review body with "Fixed in the commit that follows:" and
+                  one line per fix (path:line, what was wrong, what you changed), then
+                  a blank line, then the tally of what is LEFT, for example
+                  "2 issues left as comments, 1 minor."
+                - Do not post an inline comment for a finding you fixed. The inline
+                  comments are only for what is left, and they anchor to the code as
+                  it is in the PR now, before your fix (the commit lands after the
+                  review).
+              If you fixed nothing, do not write the message file; post the review
+              exactly as described under "How to post".
+
             How to post:
               - Post the whole round as ONE review submission: the summary as
                 the review body, every line-anchored finding as an inline
@@ -574,12 +1060,15 @@ jobs:
                     ]
                   }
 
-                then submit it (REPO and PR NUMBER are given above):
+                then submit it with exactly this command (the only gh api call
+                you are allowed; any other spelling is refused):
 
-                  gh api repos/<REPO>/pulls/<PR NUMBER>/reviews --input ${{ runner.temp }}/review-payload.json
+                  gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/reviews --input ${{ runner.temp }}/review-payload.json
 
               - "event" is always COMMENT, never APPROVE or REQUEST_CHANGES.
-              - Open the body with a tally, for example "2 issues, 1 minor".
+              - Open the body with a tally, for example "2 issues, 1 minor"
+                (after the "Fixed in the commit that follows:" block, if
+                you fixed anything; see FIXING).
                 If you found nothing, the body is "No issues found" and
                 "comments" is an empty array (still one review, so the PR
                 shows it was looked at).
@@ -599,13 +1088,266 @@ jobs:
           # See the automatic review job for why Opus at high effort and 80
           # turns, and why the payload goes in runner.temp. The first on-demand
           # run on PR 293 died at 40 turns without posting anything. Always
-          # Opus here: an on-demand review is of the whole PR.
+          # Opus here: an on-demand review is of the whole PR, so it may fix
+          # (same rules and same commit step as the automatic job).
           claude_args: |
             --model claude-opus-5-5
             --effort high
             --fallback-model claude-sonnet-5-5
             --max-turns 80
-            --allowedTools "TodoWrite,Glob,Grep,Read,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh repo view:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git blame:*),Bash(git grep:*),Bash(git ls-files:*),Bash(git ls-tree:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git merge-base:*),Bash(git cat-file:*),Bash(git branch:*),Bash(git tag:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tr:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(stat:*),Bash(file:*),Bash(jq:*),Bash(diff:*),Bash(sed:*),Bash(awk:*),Bash(od:*),Bash(xxd:*),Bash(echo:*),Bash(test:*)"
+            --permission-mode default
+            --allowedTools "TodoWrite,Glob,Grep,Read,Write${{ steps.prior.outputs.fix == 'true' && ',Edit' || '' }},Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh repo view:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git blame:*),Bash(git ls-files:*),Bash(git ls-tree:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git merge-base:*),Bash(git cat-file:*),Bash(git branch:*),Bash(git tag:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(cut:*),Bash(tr:*),Bash(grep:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(stat:*),Bash(file:*),Bash(jq:*),Bash(diff:*),Bash(od:*),Bash(echo:*),Bash(test:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/reviews --input ${{ runner.temp }}/review-payload.json)"
+
+      # The model only edits; this step commits and pushes, and every guard
+      # is here in shell rather than in the prompt. It runs after the review
+      # is posted, so the inline anchors point at the pre-fix head, and the
+      # push is the last thing the job does: the push starts a new run in
+      # this PR's concurrency group, and cancel-in-progress can then only
+      # cancel a job that has nothing left to do. Not gated on the action's
+      # success: a run that edited and then failed still gets its patch
+      # posted (or nothing, if it changed nothing).
+      #
+      # FALLBACK: with no usable REVIEW_PUSH_KEY, 'comment' (default) posts
+      # the patch instead of pushing. 'token' pushes with GITHUB_TOKEN, which
+      # starts NO workflow on the fix commit (no CI, no follow-up review) and
+      # needs `contents: write` on this job; change both together.
+      - name: Commit and push the review fix
+        if: ${{ !cancelled() && steps.review.outcome != 'skipped' && steps.prior.outputs.fix == 'true' }}
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+          HEAD_SHA: ${{ steps.gate.outputs.head_sha }}
+          HEAD_REF: ${{ steps.gate.outputs.head_ref }}
+          FIX_ENABLED: ${{ steps.prior.outputs.fix }}
+          RUN_STARTED: ${{ steps.gate.outputs.started }}
+          FALLBACK: comment
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_PUSH_TOKEN: ${{ github.token }}
+          PUSH_KEY: ${{ secrets.REVIEW_PUSH_KEY }}
+        run: |
+          # shellcheck disable=SC2016
+          # (single-quoted $ strings below are deliberate: jq programs, a trap, a git credential helper)
+          set -euo pipefail
+          # Everything here is enforced in shell, not in the prompt. The session that
+          # just ended could write files anywhere this user can (bare Write), so trust
+          # nothing it could have planted: absolute binaries, a fixed PATH, no global
+          # or system git config, no hooks, no fsmonitor, and an audit of the repo's
+          # own git config before git touches the working tree.
+          export PATH=/usr/bin:/bin
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          export GIT_CONFIG_COUNT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false
+          unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_EXEC_PATH \
+                GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_SSH GIT_SSH_COMMAND GIT_PROXY_COMMAND
+          GIT=/usr/bin/git
+          GH=/usr/bin/gh
+          SSH=/usr/bin/ssh
+          JQ=/usr/bin/jq
+          SSH_URL="git@github.com:${REPO}.git"
+          HTTPS_URL="https://github.com/${REPO}.git"
+          MAX_FILES=10
+          MAX_LINES=200
+
+          T="$RUNNER_TEMP/review-fix"
+          /bin/mkdir -p "$T"
+          trap '/bin/rm -f "$T/key" "$T/known_hosts"' EXIT
+          MSG_FILE="$RUNNER_TEMP/review-fix-message.txt"
+
+          g() {
+            "$GIT" -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+                   -c commit.gpgsign=false -c core.pager=cat "$@"
+          }
+
+          # One PR comment for every outcome that is not a clean push, so a review
+          # that says "Fixed in the commit that follows" never points at nothing.
+          refuse() {  # $1 = reason (one sentence), $2 = "patch" to attach the diff
+            local reason=$1 body="$T/comment.md"
+            echo "::warning::Review fix not pushed: $reason"
+            {
+              echo "**The review's fix was not pushed.** $reason"
+              echo
+              echo "Nothing was committed, so whatever the review lists as fixed is still open on this branch."
+              if [ "${2:-}" = patch ] && [ -s "$T/fix.patch" ]; then
+                local n
+                n=$(/usr/bin/wc -l < "$T/fix.patch")
+                echo
+                echo "This is the change it made, to apply by hand if you agree with it ($n lines):"
+                echo
+                echo '~~~~~~diff'
+                /usr/bin/head -c 50000 "$T/fix.patch" | /usr/bin/head -n 400
+                echo '~~~~~~'
+                if [ "$n" -gt 400 ] || [ "$(/usr/bin/wc -c < "$T/fix.patch")" -gt 50000 ]; then
+                  echo
+                  echo "(truncated)"
+                fi
+              fi
+            } > "$body"
+            "$JQ" -n --rawfile b "$body" '{body: $b}' > "$T/comment.json"
+            "$GH" api "repos/$REPO/issues/$PR/comments" --input "$T/comment.json" > /dev/null \
+              || echo "::warning::Could not post the refusal comment either."
+            exit 0
+          }
+
+          if [ "${FIX_ENABLED:-false}" != true ]; then
+            echo "Fix mode is off for this run; nothing to commit."
+            exit 0
+          fi
+
+          # Did this run's review say it fixed something? Read back from GitHub, not
+          # from anything the session left on disk.
+          "$GH" api "repos/$REPO/pulls/$PR/reviews" --paginate > "$T/reviews.json"
+          said_fixed=$("$JQ" -s --arg since "$RUN_STARTED" \
+            '[add[]? | select((.user.login | test("claude"; "i")) and (.submitted_at // "") >= $since)
+                      | select((.body // "") | test("fixed in the commit that follows"; "i"))] | length' \
+            "$T/reviews.json")
+          posted=$("$JQ" -s --arg since "$RUN_STARTED" \
+            '[add[]? | select((.user.login | test("claude"; "i")) and (.submitted_at // "") >= $since)] | length' \
+            "$T/reviews.json")
+
+          # Refuse git config that can run a program, redirect a URL or supply a
+          # credential. The action restores .git/config after the session, so this
+          # should never fire; if it does, something tampered with the checkout.
+          # Plain "$GIT", not g(): the audit is of the config FILES, and g() adds -c
+          # overrides of its own that would show up in the listing.
+          bad=$("$GIT" config --list --includes --name-only 2>/dev/null \
+            | /usr/bin/grep -iE '^(core\.(fsmonitor|sshcommand|askpass|pager|editor|hookspath|gitproxy|attributesfile)|credential\.|filter\.|gpg\.|uploadpack\.|receivepack\.|alias\.|diff\..*\.(textconv|command)|merge\..*\.driver|remote\..*\.(uploadpack|receivepack|vcs|proxy|pushurl)|url\..*|http\..*\.(proxy|sslcainfo|cookiefile)|http\.proxy|core\.sshcommand)' || true)
+          if [ -n "$bad" ]; then
+            refuse "The checkout's git config carries settings this step will not run git with ($(echo "$bad" | /usr/bin/tr '\n' ' '))."
+          fi
+
+          if [ "$(g rev-parse HEAD)" != "$HEAD_SHA" ]; then
+            refuse "The checkout is not at the PR head commit it was reviewed at."
+          fi
+
+          # claude-code-action replaces these with the base branch's copies before the
+          # session starts (a PR cannot plant config the CLI acts on). Put the PR's own
+          # versions back so that swap is never committed onto the PR branch.
+          for p in .claude .mcp.json .claude.json .gitmodules .ripgreprc CLAUDE.md CLAUDE.local.md AGENTS.md .husky; do
+            if [ -n "$(g ls-tree --name-only HEAD -- "$p")" ]; then
+              g checkout -q HEAD -- "$p"
+            fi
+          done
+
+          # Tracked files only: notes, the snapshot dir and anything else new stay out.
+          g add -u
+          g diff --cached --no-ext-diff --no-textconv --binary > "$T/fix.patch"
+          if [ ! -s "$T/fix.patch" ]; then
+            if [ "$said_fixed" -gt 0 ] || [ -s "$MSG_FILE" ]; then
+              refuse "The review says it fixed something, but no tracked file changed."
+            fi
+            echo "No tracked file changed; nothing to commit."
+            exit 0
+          fi
+
+          g diff --cached --name-status -z --no-renames > "$T/status"
+          g diff --cached --numstat -z --no-renames --no-ext-diff --no-textconv > "$T/numstat"
+          files=0; lines=0; problem=""
+          while IFS= read -r -d '' st && IFS= read -r -d '' path; do
+            files=$((files + 1))
+            case "$st" in
+              M) ;;
+              D) problem="it deletes $path" ;;
+              T) problem="it changes the file type of $path" ;;
+              *) problem="it changes $path in a way this step does not commit ($st)" ;;
+            esac
+            case "$path" in
+              .github/*) problem="it changes $path, and nothing under .github/ is ever committed by the reviewer" ;;
+            esac
+          done < "$T/status"
+          # numstat -z: "added<TAB>deleted<TAB>path<NUL>"; binary files show "-".
+          while IFS= read -r -d '' rec; do
+            a=${rec%%$'\t'*}; rest=${rec#*$'\t'}; d=${rest%%$'\t'*}
+            if [ "$a" = - ] || [ "$d" = - ]; then
+              problem="it changes a binary file (${rest#*$'\t'})"
+            else
+              lines=$((lines + a + d))
+            fi
+          done < "$T/numstat"
+          if [ "$(g diff --cached --summary | /usr/bin/grep -c 'mode change' || true)" -gt 0 ]; then
+            problem="it changes a file mode"
+          fi
+          [ -z "$problem" ] && [ "$files" -gt "$MAX_FILES" ] && problem="it touches $files files (the cap is $MAX_FILES)"
+          [ -z "$problem" ] && [ "$lines" -gt "$MAX_LINES" ] && problem="it changes $lines lines (the cap is $MAX_LINES)"
+          [ -n "$problem" ] && refuse "The fix was refused because $problem." patch
+
+          if [ "$posted" -eq 0 ]; then
+            refuse "The review itself was not posted, so a fix would land with no explanation." patch
+          fi
+          if [ "$said_fixed" -eq 0 ]; then
+            refuse "Files were changed, but the review does not say what it fixed." patch
+          fi
+
+          # Commit message: the session's summary if it wrote one, never any
+          # attribution line, always the "review fix:" prefix.
+          summary=""; body=""
+          if [ -s "$MSG_FILE" ]; then
+            /usr/bin/tr -d '\r' < "$MSG_FILE" \
+              | /usr/bin/grep -viE '^[[:space:]]*(co-authored-by|signed-off-by|generated (with|by)|🤖)|anthropic\.com|claude\.com/claude-code' \
+              > "$T/msg.clean" || true
+            summary=$(/usr/bin/grep -m1 -v '^[[:space:]]*$' "$T/msg.clean" || true)
+            body=$(/usr/bin/awk -v s="$summary" 'f{print} !f && $0==s {f=1}' "$T/msg.clean" \
+                   | /usr/bin/sed '/./,$!d' | /usr/bin/head -n 40)
+            summary=$(printf '%s' "$summary" | /usr/bin/sed -E 's/^[[:space:]]*(review fix:[[:space:]]*)?//I' | /usr/bin/cut -c1-60)
+          fi
+          [ -n "$summary" ] || summary="address findings from the automated review"
+          { printf 'review fix: %s\n' "$summary"; [ -n "$body" ] && printf '\n%s\n' "$body"; } > "$T/commit-msg"
+
+          # Author and committer: whoever wrote the PR's head commit, so Vercel sees a
+          # team member and blame stays with the PR's owner. The subject says what it is.
+          name=$(g log -1 --format=%an "$HEAD_SHA")
+          email=$(g log -1 --format=%ae "$HEAD_SHA")
+          GIT_AUTHOR_NAME="$name" GIT_AUTHOR_EMAIL="$email" \
+          GIT_COMMITTER_NAME="$name" GIT_COMMITTER_EMAIL="$email" \
+            g -c user.name="$name" -c user.email="$email" commit -q --no-verify -F "$T/commit-msg"
+          new_sha=$(g rev-parse HEAD)
+          echo "Committed $new_sha ($files file(s), $lines line(s)): $(/usr/bin/head -n1 "$T/commit-msg")"
+
+          # Push: deploy key if there is one (CI and the follow-up review then run on
+          # the fix), never force. A push with GITHUB_TOKEN starts no workflow at all,
+          # so that fallback is opt-in; the default posts the patch instead.
+          push_log="$T/push.log"
+          if [ -n "${PUSH_KEY:-}" ] && [ -x "$SSH" ]; then
+            umask 077
+            printf '%s\n' "$PUSH_KEY" > "$T/key"
+            # Pinned from `gh api meta` (2026-11-20, SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU).
+            echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$T/known_hosts"
+            export GIT_SSH_COMMAND="$SSH -F /dev/null -i $T/key -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$T/known_hosts -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=20"
+            rc=0
+            /usr/bin/timeout 120 "$GIT" -c core.hooksPath=/dev/null push --no-verify --porcelain \
+              "$SSH_URL" "HEAD:refs/heads/$HEAD_REF" > "$push_log" 2>&1 || rc=$?
+            /bin/rm -f "$T/key"
+            how="deploy key"
+          else
+            if [ -n "${PUSH_KEY:-}" ]; then
+              echo "::warning::REVIEW_PUSH_KEY is set but this runner has no ssh client ($SSH)."
+            else
+              echo "::warning::No REVIEW_PUSH_KEY secret on this repository."
+            fi
+            if [ "${FALLBACK:-comment}" != token ]; then
+              refuse "This repository cannot push it yet (no usable REVIEW_PUSH_KEY deploy key on this runner)." patch
+            fi
+            echo "::warning::Pushing with GITHUB_TOKEN: CI and the follow-up review will NOT run on the fix commit."
+            rc=0
+            PUSH_TOKEN="$GITHUB_PUSH_TOKEN" /usr/bin/timeout 120 "$GIT" -c core.hooksPath=/dev/null \
+              -c credential.helper= -c 'credential.https://github.com.helper=' \
+              -c 'credential.https://github.com.helper=!f() { echo username=x-access-token; echo "password=$PUSH_TOKEN"; }; f' \
+              -c 'http.https://github.com/.extraheader=' \
+              push --no-verify --porcelain "$HTTPS_URL" "HEAD:refs/heads/$HEAD_REF" > "$push_log" 2>&1 || rc=$?
+            how="GITHUB_TOKEN"
+          fi
+          /bin/sed -E 's#(https://)[^@/]*@#\1***@#g' "$push_log"
+          if [ "$rc" -ne 0 ]; then
+            if /usr/bin/grep -qiE 'non-fast-forward|fetch first|\[rejected\]|stale info' "$push_log"; then
+              refuse "The PR branch moved while the review ran, so the fix no longer applies cleanly on top of it." patch
+            fi
+            refuse "The push to $HEAD_REF failed ($how, exit $rc)." patch
+          fi
+          echo "::notice::Review fix $new_sha pushed to $HEAD_REF via $how."
+          {
+            echo "### Review fix pushed"
+            echo
+            echo "\`$new_sha\` on \`$HEAD_REF\` via $how: $(/usr/bin/head -n1 "$T/commit-msg")"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # On-demand: someone writes "@claude ..." in a PR or issue comment. Anything
   # starting "@claude review" is handled by the job above instead.
@@ -622,7 +1364,12 @@ jobs:
     permissions:
       # Deliberately read-only on contents: this job runs on the HTPC, which
       # also hosts Immich, Nextcloud, Plex and Polymarket. @claude can answer
-      # and review on demand, but cannot push commits.
+      # and review on demand, but cannot push commits. What enforces that
+      # is --permission-mode default below plus an allow list with no git
+      # write command, NOT this permission: the action's own app token in
+      # the checkout's remote can write contents, and since claude-code-action
+      # 2026-11-12 the default mode is auto, where a call outside the allow
+      # list can still be approved.
       contents: read
       pull-requests: write
       issues: write
@@ -647,5 +1394,6 @@ jobs:
           # that writes to the repo (see the contents: read note above).
           claude_args: |
             --model claude-opus-5-5
+            --permission-mode default
             --max-turns 40
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh issue comment:*),TodoWrite,Glob,Grep,Read,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh repo view:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git blame:*),Bash(git grep:*),Bash(git ls-files:*),Bash(git ls-tree:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git merge-base:*),Bash(git cat-file:*),Bash(git branch:*),Bash(git tag:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tr:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(stat:*),Bash(file:*),Bash(jq:*),Bash(diff:*),Bash(sed:*),Bash(awk:*),Bash(od:*),Bash(xxd:*),Bash(echo:*),Bash(test:*)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh issue comment:*),TodoWrite,Glob,Grep,Read,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh repo view:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git blame:*),Bash(git ls-files:*),Bash(git ls-tree:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git merge-base:*),Bash(git cat-file:*),Bash(git branch:*),Bash(git tag:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(cut:*),Bash(tr:*),Bash(grep:*),Bash(basename:*),Bash(dirname:*),Bash(realpath:*),Bash(stat:*),Bash(file:*),Bash(jq:*),Bash(diff:*),Bash(od:*),Bash(echo:*),Bash(test:*)"
