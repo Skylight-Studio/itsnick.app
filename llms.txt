@@ -1,14 +1,15 @@
 # Nick Harris
 
-> Personal site of Nick Harris: founder of Skylight Studio, builder of Setlist.ID, one half of BlondeBrunette. Based in Barcelona.
+> Personal site of Nick Harris: founder of Skylight Studio, builder of Setlist.ID and Miniverse, one half of Blonde Brunette. Based in Barcelona.
 
-Nick Harris is an entrepreneur and analytics leader based in Barcelona, Spain. Born in South Africa, raised in Florida. Founder of Skylight Studio, an enterprise AI consultancy. After a decade building analytics practices for clients including NASCAR, DoorDash, National Grid, and Tufts Health Plan, he started Skylight Studio to bring enterprise-grade AI to every business. He also makes music as one half of BlondeBrunette and builds Setlist.ID, a tool for identifying tracklists in DJ mixes. Founder and board member of ReMade BCN, a community-run makerspace in Barcelona focused on open tools, learning, and collaboration.
+Nick Harris is an entrepreneur and analytics leader based in Barcelona, Spain. Born in South Africa, raised in Florida. Founder of Skylight Studio, a consulting studio that brings organization and technology to small businesses. Before that, he spent a decade building analytics practices in motorsports, logistics, energy, and healthcare. He also makes music as one half of Blonde Brunette and builds Setlist.ID, a tool for identifying tracklists in DJ mixes, and Miniverse, social media for the people in your life. Founder and board member of ReMade BCN, a community-run makerspace in Barcelona focused on open tools, learning, and collaboration.
 
 ## Projects
 
-- [Skylight Studio](https://skylightstudio.co): Enterprise AI consultancy founded by Nick Harris. Brings enterprise-grade AI to businesses of every size.
+- [Skylight Studio](https://skylightstudio.co): Consulting studio founded by Nick Harris. Brings organization and technology to small businesses.
 - [Setlist.ID](https://setlist.id): Tool for identifying tracklists in DJ mixes.
-- [BlondeBrunette](https://blondebrunette.music): Music duo. Nick is one half.
+- [Miniverse](https://miniverse.lol): Next generation social media. Invite-only iPhone app for the people in your life.
+- [Blonde Brunette](https://blondebrunette.music): Music duo. Nick is one half.
 - [ReMade BCN](https://www.made-bcn.org/): Community-run makerspace in Barcelona. Nick is a founder and board member.
 
 ## Profiles

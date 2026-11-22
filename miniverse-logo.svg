@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Miniverse app icon, rounded for the tile. -->
+  <defs><linearGradient id="ground" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#16818B"/><stop offset="1" stop-color="#0E6E78"/></linearGradient></defs>
+  <rect width="1024" height="1024" rx="228" fill="url(#ground)"/>
+  <path d="M251.1 442.6A270 270 0 0 1 582.4 251.3" fill="none" stroke="#F2A46C" stroke-width="24" stroke-linecap="round"/>
+  <path d="M702.6 320.7A270 270 0 0 1 702.6 703.3" fill="none" stroke="#F2A46C" stroke-width="24" stroke-linecap="round"/>
+  <path d="M582.4 772.7A270 270 0 0 1 251.1 581.4" fill="none" stroke="#F2A46C" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="512" cy="512" r="92" fill="#FFF3D2"/>
+  <circle cx="647.0" cy="278.2" r="46" fill="#F1BE55"/>
+  <circle cx="647.0" cy="745.8" r="46" fill="#E98A8A"/>
+  <circle cx="242.0" cy="512.0" r="46" fill="#8FC8EC"/>
+</svg>
