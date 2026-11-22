@@ -2,7 +2,7 @@
 
 > Personal site of Nick Harris: founder of Skylight Studio, builder of Setlist.ID and Miniverse, one half of Blonde Brunette. Based in Barcelona.
 
-Nick Harris is an entrepreneur and analytics leader based in Barcelona, Spain. Born in South Africa, raised in Florida. Founder of Skylight Studio, a consulting studio that brings organization and technology to small businesses. Before that, he spent a decade building analytics practices in motorsports, logistics, energy, and healthcare. He also makes music as one half of Blonde Brunette and builds Setlist.ID, a tool for identifying tracklists in DJ mixes, and Miniverse, social media for the people in your life. Founder and board member of ReMade BCN, a community-run makerspace in Barcelona focused on open tools, learning, and collaboration.
+Nick Harris is an entrepreneur and analytics leader based in Barcelona, Spain. Born in South Africa, raised in Florida. Founder of Skylight Studio, a consulting studio that brings organization and technology to small businesses. Before that, he spent a decade building analytics practices in motorsports, logistics, energy, and healthcare. He makes music as one half of Blonde Brunette. He builds Setlist.ID, a tool for identifying tracklists in DJ mixes, and Miniverse, social media for the people in your life. Founder and board member of ReMade BCN, a community-run makerspace in Barcelona focused on open tools, learning, and collaboration.
 
 ## Projects
 
