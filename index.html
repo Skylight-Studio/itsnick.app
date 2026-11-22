@@ -92,7 +92,7 @@
       }
       .bio p { margin: 0 0 14px; }
       .bio p:last-child { margin-bottom: 0; }
-      .bio a {
+      .bio a, .contact a {
         color: var(--fg);
         text-decoration: underline;
         text-decoration-thickness: 1px;
@@ -100,7 +100,7 @@
         text-underline-offset: 2px;
         transition: text-decoration-color 0.15s;
       }
-      .bio a:hover { text-decoration-color: var(--fg); }
+      .bio a:hover, .contact a:hover { text-decoration-color: var(--fg); }
       a:focus-visible {
         outline: 2px solid var(--fg);
         outline-offset: 3px;
@@ -112,7 +112,6 @@
         gap: 12px;
         margin: 0 0 28px;
       }
-      .tile:first-child { grid-column: 1 / -1; }
       .tile {
         display: flex;
         align-items: center;
@@ -150,6 +149,12 @@
         color: var(--muted);
         font-size: 14px;
         margin-top: 4px;
+      }
+      .contact {
+        text-align: center;
+        color: var(--muted);
+        font-size: 16px;
+        margin: 0 0 20px;
       }
       .socials {
         display: flex;
@@ -306,6 +311,13 @@
             <div class="tile-desc">Next generation social media</div>
           </div>
         </a>
+        <a class="tile" href="https://spectrumpatronum.es/">
+          <img class="tile-logo" src="/spectrum-patronum-logo.svg" alt="" width="72" height="72" loading="lazy" decoding="async" />
+          <div class="tile-text">
+            <div class="tile-name">Spectrum Patronum</div>
+            <div class="tile-desc">Music collective</div>
+          </div>
+        </a>
         <a class="tile" href="https://www.made-bcn.org/" rel="me">
           <img class="tile-logo" src="/made-bcn-logo.png" alt="" width="72" height="72" loading="lazy" decoding="async" />
           <div class="tile-text">
@@ -314,6 +326,8 @@
           </div>
         </a>
       </div>
+
+      <p class="contact">Open to collaborations. <a href="mailto:nickharris@skylightstudio.co">Let's talk</a>.</p>
 
       <ul class="socials">
         <li><a href="https://www.linkedin.com/in/nicholasmharris/" rel="me" aria-label="LinkedIn">

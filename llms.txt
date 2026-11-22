@@ -10,6 +10,7 @@ Nick Harris is an entrepreneur and analytics leader based in Barcelona, Spain. B
 - [Setlist.ID](https://setlist.id): Tool for identifying tracklists in DJ mixes.
 - [Miniverse](https://miniverse.lol): Next generation social media. Invite-only iPhone app for the people in your life.
 - [Blonde Brunette](https://blondebrunette.music): Music duo. Nick is one half.
+- [Spectrum Patronum](https://spectrumpatronum.es/): Music collective in Barcelona.
 - [ReMade BCN](https://www.made-bcn.org/): Community-run makerspace in Barcelona. Nick is a founder and board member.
 
 ## Profiles

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="86.5 117.5 410 410" width="410" height="410">
+<g fill="none" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+<line x1="273" y1="133" x2="277" y2="318" stroke="#EC9742"/>
+<line x1="277" y1="318" x2="140" y2="410" stroke="#6167A6"/>
+<line x1="277" y1="318" x2="452" y2="382" stroke="#51A762"/>
+<line x1="108" y1="195" x2="273" y2="133" stroke="#E27E48"/>
+<line x1="273" y1="133" x2="475" y2="175" stroke="#F5C536"/>
+<line x1="475" y1="175" x2="452" y2="382" stroke="#B4CB43"/>
+<line x1="108" y1="195" x2="140" y2="410" stroke="#774C99"/>
+<line x1="140" y1="410" x2="330" y2="512" stroke="#447FAD"/>
+<line x1="330" y1="512" x2="452" y2="382" stroke="#53A281"/>
+<line x1="338" y1="262" x2="330" y2="512" stroke="#499C7E"/>
+<line x1="338" y1="262" x2="108" y2="195" stroke="#E57D45"/>
+<line x1="475" y1="175" x2="338" y2="262" stroke="#F7DE3B"/>
+</g>
+</svg>
